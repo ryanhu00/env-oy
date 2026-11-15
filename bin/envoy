@@ -10,13 +10,13 @@ while [ -L "$script" ]; do
 done
 root=$(CDPATH= cd -P "$(dirname "$script")/.." && pwd) || exit 1
 if [ -z "${HOME:-}" ]; then
-  printf '%s\n' 'dgui: HOME is not set' >&2
+  printf '%s\n' 'Envoy: HOME is not set' >&2
   exit 1
 fi
-data_dir=$HOME/.local/share/devin-conductor
+data_dir=$HOME/.local/share/envoy
 umask 077
 if ! mkdir -p "$data_dir" || ! chmod 700 "$data_dir"; then
-  printf '%s\n' 'dgui: cannot prepare restart channel directory' >&2
+  printf '%s\n' 'Envoy: cannot prepare restart channel directory' >&2
   exit 1
 fi
 channel=$data_dir/restart-channel-$$-$(date +%s)
@@ -33,13 +33,13 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 while :; do
-  DEVIN_CONDUCTOR_RESTART_CHANNEL=$channel node "$root/dist/index.js" "$@"
+  ENVOY_RESTART_CHANNEL=$channel node "$root/dist/index.js" "$@"
   status=$?
   if [ "$status" -ne 75 ]; then
     exit "$status"
   fi
   if [ ! -f "$channel" ]; then
-    printf '%s\n' 'dgui refresh failed: restart channel missing' >&2
+    printf '%s\n' 'Envoy refresh failed: restart channel missing' >&2
     exit 1
   fi
 done

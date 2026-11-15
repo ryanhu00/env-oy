@@ -32,7 +32,7 @@ export class DesktopNotifier {
     if (now - (this.lastSentAt.get(sessionId) ?? 0) < 3000) return;
     this.lastSentAt.set(sessionId, now);
     const body = `${name}: ${BODY[type]}`.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    execFile('osascript', ['-e', `display notification "${body}" with title "devin-conductor"`], () => {});
+    execFile('osascript', ['-e', `display notification "${body}" with title "Envoy"`], () => {});
     process.stdout.write('\x07');
   }
 }

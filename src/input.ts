@@ -1,12 +1,11 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import type { AdapterId } from './adapters/types';
 import { ExternalSession, RecentSession } from './discovery';
 import { Session } from './session';
 import { RenameTarget, SessionManager } from './sessionManager';
-import { HaeinRuntime } from './haein/runtime';
-
-export type Mode = 'sidebar' | 'move' | 'rename' | 'attached' | 'form' | 'confirm' | 'tag-picker' | 'tag-name' | 'tag-position' | 'haein-tag';
+export type Mode = 'sidebar' | 'move' | 'rename' | 'attached' | 'form' | 'confirm' | 'tag-picker' | 'tag-name' | 'tag-position';
 
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
@@ -19,6 +18,8 @@ export interface FormState {
   cwd: string;
   name: string;
   error: string;
+  /** CLI the new session will run; changed with ←/→ when more than one CLI is enabled. */
+  adapterId: AdapterId;
 }
 
 export interface ConfirmState {
@@ -50,7 +51,7 @@ export interface TagPositionState {
 }
 
 type PendingAction =
-  | { kind: 'fresh'; cwd: string; name: string }
+  | { kind: 'fresh'; cwd: string; name: string; adapterId: AdapterId }
   | { kind: 'recent'; recent: RecentSession }
   | { kind: 'external'; external: ExternalSession; tag: string | null };
 
@@ -96,8 +97,8 @@ export class InputHandler {
    * @param manager Session manager mutated by navigation and lifecycle keys.
    * @param render Schedules a redraw after state changes.
    * @param quit Terminates the app after quit confirmation.
-   * @param refreshAvailable Whether dgui was started through the stable refresh launcher.
-   * @param refresh Restarts dgui after refresh readiness and confirmation.
+   * @param refreshAvailable Whether envoy was started through the stable refresh launcher.
+   * @param refresh Restarts envoy after refresh readiness and confirmation.
    * @param defaultCwd Default working directory offered in the new-session form.
    */
   constructor(
@@ -106,8 +107,7 @@ export class InputHandler {
     private readonly quit: () => void,
     private readonly refreshAvailable: boolean,
     private readonly refresh: () => void | Promise<void>,
-    private readonly defaultCwd: string,
-    private readonly haein?: HaeinRuntime
+    private readonly defaultCwd: string
   ) {}
 
   /**
@@ -148,9 +148,6 @@ export class InputHandler {
           } else if (this.mode === 'tag-name' && this.tagName) {
             this.tagName.value += payload.replace(/[\x00-\x1f\x7f]/g, '');
             this.tagName.error = '';
-          } else if (this.mode === 'haein-tag' && this.haein?.tagEdit) {
-            this.haein.tagEdit.value += payload.replace(/[\x00-\x1f\x7f]/g, '');
-            this.haein.tagEdit.error = '';
           }
         }
       } else {
@@ -201,7 +198,6 @@ export class InputHandler {
       else if (this.mode === 'tag-picker') this.tagPickerKey(key);
       else if (this.mode === 'tag-name') this.tagNameKey(key);
       else if (this.mode === 'tag-position') this.tagPositionKey(key);
-      else if (this.mode === 'haein-tag') this.haeinTagKey(key);
     }
   }
 
@@ -242,10 +238,6 @@ export class InputHandler {
    * @returns Nothing.
    */
   private sidebarKey(key: string): void {
-    if (this.haein) {
-      this.haeinSidebarKey(key);
-      return;
-    }
     const last = this.manager.entries.length - 1;
     const half = Math.max(1, Math.floor(((process.stdout.rows || 24) - 3) / 6));
     if (this.pendingG) {
@@ -273,18 +265,18 @@ export class InputHandler {
         this.beginTagPicker({ kind: 'external', external: e.external, tag: null });
       }
     } else if (key === 'n') {
-      this.form = { field: 0, cwd: this.defaultCwd, name: '', error: '' };
+      this.form = { field: 0, cwd: this.defaultCwd, name: '', error: '', adapterId: this.manager.defaultAdapterId };
       this.mode = 'form';
     } else if (key === 'H') {
       this.manager.toggleRecentVisibility();
     } else if (key === 'R') {
-      if (!this.refreshAvailable) this.notice = 'Cannot refresh: restart dgui once to enable the launcher';
+      if (!this.refreshAvailable) this.notice = 'Cannot refresh: restart envoy once to enable the launcher';
       else {
         const readiness = this.manager.getRefreshReadiness();
         if (!readiness.ready) this.notice = readiness.message;
         else {
           this.confirm = {
-            question: `Refresh dgui and reconnect ${readiness.count} idle session${readiness.count === 1 ? '' : 's'}? Draft text and local scrollback will be lost.`,
+            question: `Refresh Envoy and reconnect ${readiness.count} idle session${readiness.count === 1 ? '' : 's'}? Draft text and local scrollback will be lost.`,
             onYes: this.refresh,
           };
           this.mode = 'confirm';
@@ -303,7 +295,7 @@ export class InputHandler {
         this.mode = 'rename';
       } else if (entry?.kind === 'recent') {
         this.rename = {
-          target: { kind: 'discovered', sessionId: entry.recent.sessionId },
+          target: { kind: 'discovered', adapterId: entry.recent.adapterId, sessionId: entry.recent.sessionId },
           section: 'RECENT',
           original: entry.recent.title || entry.recent.sessionId,
           value: this.manager.displayName(entry),
@@ -312,7 +304,7 @@ export class InputHandler {
         this.mode = 'rename';
       } else if (entry?.kind === 'external') {
         this.rename = {
-          target: { kind: 'discovered', sessionId: entry.external.sessionId },
+          target: { kind: 'discovered', adapterId: entry.external.adapterId, sessionId: entry.external.sessionId },
           section: 'TERMINAL',
           original: entry.external.title || entry.external.sessionId,
           value: this.manager.displayName(entry),
@@ -345,42 +337,9 @@ export class InputHandler {
         this.notice = 'x only kills ACTIVE sessions';
       }
     } else if (key === 'q' || key === '\x03') {
-      this.confirm = { question: 'Quit devin-conductor and kill all sessions?', onYes: this.quit };
+      this.confirm = { question: 'Quit Envoy and kill all sessions?', onYes: this.quit };
       this.mode = 'confirm';
     }
-  }
-
-  /** Handles Haein task navigation, focus/launch, grouping, tagging and quitting. */
-  private haeinSidebarKey(key: string): void {
-    const haein = this.haein!;
-    const last = Math.max(0, haein.tasks.length - 1);
-    if (key === 'j' || key === '\x1b[B') haein.move(1);
-    else if (key === 'k' || key === '\x1b[A') haein.move(-1);
-    else if (key === 'g') haein.toggleGrouping();
-    else if (key === '\r') {
-      void haein.launchOrAttach().then((session) => {
-        if (session) { this.mode = 'attached'; this.attachedMode = 'normal'; this.render(); }
-      });
-    } else if (key === 't') {
-      haein.beginTagEdit();
-      if (haein.tagEdit) this.mode = 'haein-tag';
-    } else if (key === 'q' || key === '\x03') {
-      this.confirm = { question: 'Quit devin-conductor and kill all sessions?', onYes: this.quit };
-      this.mode = 'confirm';
-    } else if (key === 'G') {
-      haein.move(last - haein.selected);
-    }
-  }
-
-  /** Handles the Haein task tag text-entry field. */
-  private haeinTagKey(key: string): void {
-    const edit = this.haein?.tagEdit;
-    if (!edit || !this.haein) { this.mode = 'sidebar'; return; }
-    if (key === '\x1b') { this.haein.tagEdit = null; this.mode = 'sidebar'; }
-    else if (key === '\r') void this.haein.saveTagEdit().then(() => { if (!this.haein!.tagEdit) this.mode = 'sidebar'; this.render(); });
-    else if (key === '\x7f' || key === '\b') { edit.value = edit.value.slice(0, -1); edit.error = ''; }
-    else if (key === '\x15') { edit.value = ''; edit.error = ''; }
-    else if (key.length >= 1 && !key.startsWith('\x1b') && key >= ' ') { edit.value += key; edit.error = ''; }
   }
 
   /**
@@ -415,7 +374,7 @@ export class InputHandler {
   }
 
   /**
-   * Edits, saves or cancels a dgui-only alias against its stable row identity.
+   * Edits, saves or cancels a envoy-only alias against its stable row identity.
    * @param key Single key token from rename mode.
    * @returns Nothing; successful save and cancel return to the sidebar.
    */
@@ -465,6 +424,12 @@ export class InputHandler {
       this.mode = 'sidebar';
     } else if (key === '\t') {
       f.field = f.field === 0 ? 1 : 0;
+    } else if (key === '\x1b[C' || key === '\x1b[D') {
+      const ids = this.manager.adapters.map((adapter) => adapter.id);
+      if (ids.length > 1) {
+        const at = Math.max(0, ids.indexOf(f.adapterId));
+        f.adapterId = ids[(at + (key === '\x1b[C' ? 1 : ids.length - 1)) % ids.length];
+      }
     } else if (key === '\r') {
       if (f.field === 0) {
         f.field = 1;
@@ -483,7 +448,7 @@ export class InputHandler {
         return;
       }
       this.form = null;
-      this.beginTagPicker({ kind: 'fresh', cwd: dir, name: f.name.trim() });
+      this.beginTagPicker({ kind: 'fresh', cwd: dir, name: f.name.trim(), adapterId: f.adapterId });
     } else if (key === '\x7f' || key === '\b') {
       if (f.field === 0) f.cwd = f.cwd.slice(0, -1);
       else f.name = f.name.slice(0, -1);
@@ -636,12 +601,12 @@ export class InputHandler {
     this.pendingG = false;
     if (action.kind === 'fresh') {
       this.pendingAction = null;
-      this.manager.create(action.cwd, action.name, tag);
+      this.manager.create(action.cwd, action.name, tag, undefined, { adapterId: action.adapterId });
       this.mode = 'attached';
       this.attachedMode = 'insert';
     } else if (action.kind === 'recent') {
       this.pendingAction = null;
-      this.manager.create(action.recent.cwd, action.recent.title || action.recent.sessionId, tag, action.recent.sessionId);
+      this.manager.create(action.recent.cwd, action.recent.title || action.recent.sessionId, tag, action.recent.sessionId, { adapterId: action.recent.adapterId });
       this.mode = 'attached';
       this.attachedMode = 'normal';
     } else {

@@ -13,7 +13,7 @@ import { SessionManager, SidebarEntry } from '../src/sessionManager';
 import { TagStore } from '../src/tags';
 import { Renderer, SIDEBAR_W } from '../src/ui/renderer';
 
-const HOOK_SCRIPT = path.resolve(__dirname, '..', 'bin', 'conductor-hook.sh');
+const HOOK_SCRIPT = path.resolve(__dirname, '..', 'bin', 'envoy-hook.sh');
 
 function stripAnsi(value: string): string {
   return value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
@@ -29,14 +29,14 @@ async function waitFor(predicate: () => boolean, message: string, timeout = 8000
 }
 
 function runHook(eventsDir: string, event: string, payload: string, conductorId: string | null): string {
-  const env: Record<string, string> = { ...process.env, DEVIN_CONDUCTOR_EVENTS_DIR: eventsDir } as Record<string, string>;
-  if (conductorId) env.DEVIN_CONDUCTOR_ID = conductorId;
-  else delete env.DEVIN_CONDUCTOR_ID;
+  const env: Record<string, string> = { ...process.env, ENVOY_EVENTS_DIR: eventsDir } as Record<string, string>;
+  if (conductorId) env.ENVOY_ID = conductorId;
+  else delete env.ENVOY_ID;
   return execFileSync(HOOK_SCRIPT, [event], { input: payload, env, encoding: 'utf8' });
 }
 
 function testHookScriptPayload(): void {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-conductor-hook-payload-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'envoy-hook-payload-'));
   const eventsFile = path.join(root, 'events.jsonl');
   try {
     const prompt = 'investigate the\tflaky login test\nand report back';
@@ -79,7 +79,7 @@ function testHookScriptPayload(): void {
 }
 
 async function testTailerDispatchesPayload(): Promise<void> {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-conductor-tailer-payload-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'envoy-tailer-payload-'));
   const eventsFile = path.join(root, 'events.jsonl');
   const received: Array<{ id: string; event: string; payload?: Record<string, unknown> }> = [];
   const tailer = new EventsTailer(root, (id, event, payload) => {
@@ -104,13 +104,13 @@ async function testTailerDispatchesPayload(): Promise<void> {
 }
 
 async function testManagerRecordsTurns(): Promise<void> {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-conductor-prompt-turns-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'envoy-prompt-turns-'));
   const command = path.join(root, 'fake-devin');
-  const previousCommand = process.env.DEVIN_CONDUCTOR_CMD;
+  const previousCommand = process.env.ENVOY_CMD;
   let manager: SessionManager | null = null;
   try {
     fs.writeFileSync(command, "#!/bin/sh\ntrap 'exit 0' HUP TERM INT\nwhile :; do sleep 1; done\n", { mode: 0o700 });
-    process.env.DEVIN_CONDUCTOR_CMD = command;
+    process.env.ENVOY_CMD = command;
     const configPath = path.join(root, 'config.json');
     fs.writeFileSync(configPath, JSON.stringify({ tags: ['code'] }));
     manager = new SessionManager(root, [root], new TagStore(configPath), () => {}, new DesktopNotifier(false));
@@ -142,20 +142,20 @@ async function testManagerRecordsTurns(): Promise<void> {
     manager?.killAll();
     for (const session of manager?.sessions ?? []) session.term.dispose();
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
-    if (previousCommand === undefined) delete process.env.DEVIN_CONDUCTOR_CMD;
-    else process.env.DEVIN_CONDUCTOR_CMD = previousCommand;
+    if (previousCommand === undefined) delete process.env.ENVOY_CMD;
+    else process.env.ENVOY_CMD = previousCommand;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
 async function testManagerTracksLastPromptAt(): Promise<void> {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-conductor-last-prompt-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'envoy-last-prompt-'));
   const command = path.join(root, 'fake-devin');
-  const previousCommand = process.env.DEVIN_CONDUCTOR_CMD;
+  const previousCommand = process.env.ENVOY_CMD;
   let manager: SessionManager | null = null;
   try {
     fs.writeFileSync(command, "#!/bin/sh\ntrap 'exit 0' HUP TERM INT\nwhile :; do sleep 1; done\n", { mode: 0o700 });
-    process.env.DEVIN_CONDUCTOR_CMD = command;
+    process.env.ENVOY_CMD = command;
     const configPath = path.join(root, 'config.json');
     fs.writeFileSync(configPath, JSON.stringify({ tags: ['code'] }));
     manager = new SessionManager(root, [root], new TagStore(configPath), () => {}, new DesktopNotifier(false));
@@ -195,8 +195,8 @@ async function testManagerTracksLastPromptAt(): Promise<void> {
     manager?.killAll();
     for (const session of manager?.sessions ?? []) session.term.dispose();
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
-    if (previousCommand === undefined) delete process.env.DEVIN_CONDUCTOR_CMD;
-    else process.env.DEVIN_CONDUCTOR_CMD = previousCommand;
+    if (previousCommand === undefined) delete process.env.ENVOY_CMD;
+    else process.env.ENVOY_CMD = previousCommand;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
@@ -210,7 +210,8 @@ async function testRendererPinsPromptHeader(): Promise<void> {
     cwd: '/Users/example/projects/pinned',
     tag: 'code',
     term: terminal,
-    devinSessionId: null,
+    adapterId: 'devin',
+    cliSessionId: null,
     memoryBytes: null,
     status: 'waiting',
     unread: [],
@@ -223,7 +224,9 @@ async function testRendererPinsPromptHeader(): Promise<void> {
     selected: 0,
     attachedId: 'attached',
     sessions: [session],
-    discovery: { recents: [], totalMemoryBytes: 512 * 1024 ** 2 },
+    discovery: { recents: [], totalMemoryBytes: 512 * 1024 ** 2, memoryByAdapter: new Map() },
+    adapters: [{ id: 'devin', label: 'Devin', badge: 'DV' }],
+    badgeFor: (): string => '',
     tagStore: { tags: ['code'] },
     recentVisible: true,
     moveState: null,

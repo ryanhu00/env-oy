@@ -30,7 +30,8 @@ function createFixture(status: SessionStatus, markedDone: boolean, unread: Notif
     cwd: '/Users/example/projects/flagged',
     tag: 'code',
     term: terminal,
-    devinSessionId: null,
+    adapterId: 'devin',
+    cliSessionId: null,
     memoryBytes: 512 * 1024 ** 2,
     status,
     unread,
@@ -43,7 +44,9 @@ function createFixture(status: SessionStatus, markedDone: boolean, unread: Notif
     selected,
     attachedId: null,
     sessions: [session],
-    discovery: { recents: [], totalMemoryBytes: null },
+    discovery: { recents: [], totalMemoryBytes: null, memoryByAdapter: new Map() },
+    adapters: [{ id: 'devin', label: 'Devin', badge: 'DV' }],
+    badgeFor: (): string => '',
     tagStore: { tags: ['code'] },
     recentVisible: true,
     moveState: null,
@@ -76,13 +79,13 @@ function sidebarFor(status: SessionStatus, markedDone: boolean, unread: Notifica
 }
 
 async function testSidebarFlagToggle(): Promise<void> {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-conductor-marked-done-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'envoy-marked-done-'));
   const command = path.join(root, 'fake-devin');
-  const previousCommand = process.env.DEVIN_CONDUCTOR_CMD;
+  const previousCommand = process.env.ENVOY_CMD;
   let manager: SessionManager | null = null;
   try {
     fs.writeFileSync(command, FAKE_DEVIN, { mode: 0o700 });
-    process.env.DEVIN_CONDUCTOR_CMD = command;
+    process.env.ENVOY_CMD = command;
     const configPath = path.join(root, 'config.json');
     fs.writeFileSync(configPath, JSON.stringify({ tags: ['code'] }));
     let redraws = 0;
@@ -105,8 +108,8 @@ async function testSidebarFlagToggle(): Promise<void> {
     input.handle('d');
     assert.equal(session.markedDone, false);
 
-    manager.discovery.externals = [{ pid: 424242, sessionId: 'external-one', cwd: root, title: 'terminal one', lastAgo: 'now', memoryBytes: null }];
-    manager.discovery.recents = [{ sessionId: 'recent-one', cwd: root, title: 'recent one', lastAgo: '1m', lastActivityAt: 10 }];
+    manager.discovery.externals = [{ adapterId: 'devin', pid: 424242, sessionId: 'external-one', cwd: root, title: 'terminal one', lastAgo: 'now', memoryBytes: null }];
+    manager.discovery.recents = [{ adapterId: 'devin', sessionId: 'recent-one', cwd: root, title: 'recent one', lastAgo: '1m', lastActivityAt: 10 }];
     manager.selected = manager.entries.findIndex((entry) => entry.kind === 'external');
     input.handle('d');
     assert.equal(input.notice, 'd only flags ACTIVE sessions');
@@ -124,8 +127,8 @@ async function testSidebarFlagToggle(): Promise<void> {
     manager?.killAll();
     for (const session of manager?.sessions ?? []) session.term.dispose();
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
-    if (previousCommand === undefined) delete process.env.DEVIN_CONDUCTOR_CMD;
-    else process.env.DEVIN_CONDUCTOR_CMD = previousCommand;
+    if (previousCommand === undefined) delete process.env.ENVOY_CMD;
+    else process.env.ENVOY_CMD = previousCommand;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
@@ -166,14 +169,14 @@ function testFlaggedSidebarStatusAndBadge(): void {
 }
 
 async function testFlagRestartRoundTrip(): Promise<void> {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-conductor-marked-done-restart-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'envoy-marked-done-restart-'));
   const command = path.join(root, 'fake-devin');
-  const previousCommand = process.env.DEVIN_CONDUCTOR_CMD;
+  const previousCommand = process.env.ENVOY_CMD;
   let manager: SessionManager | null = null;
   let replacement: SessionManager | null = null;
   try {
     fs.writeFileSync(command, FAKE_DEVIN, { mode: 0o700 });
-    process.env.DEVIN_CONDUCTOR_CMD = command;
+    process.env.ENVOY_CMD = command;
     const configPath = path.join(root, 'config.json');
     fs.writeFileSync(configPath, JSON.stringify({ tags: ['code'] }));
     manager = new SessionManager(root, [root], new TagStore(configPath), () => {}, new DesktopNotifier(false));
@@ -193,7 +196,7 @@ async function testFlagRestartRoundTrip(): Promise<void> {
     assert.deepEqual(invalid?.sessions, []);
 
     const legacy = validateRestartState({
-      version: RESTART_STATE_VERSION,
+      version: 1,
       selectedSessionId: null,
       sessions: [{ devinSessionId: 'session-legacy', cwd: root, name: 'legacy', tag: 'code', unread: [], status: 'waiting' }],
     }, ['code']);
@@ -207,8 +210,8 @@ async function testFlagRestartRoundTrip(): Promise<void> {
       sessions: [validated!.sessions[0], legacy!.sessions[0]],
     });
     assert.equal(restored.length, 2);
-    assert.equal(restored.find((entry) => entry.devinSessionId === 'session-a')?.markedDone, true);
-    assert.equal(restored.find((entry) => entry.devinSessionId === 'session-legacy')?.markedDone, false);
+    assert.equal(restored.find((entry) => entry.cliSessionId === 'session-a')?.markedDone, true);
+    assert.equal(restored.find((entry) => entry.cliSessionId === 'session-legacy')?.markedDone, false);
     assert.deepEqual(restored[0].unread, []);
     assert.equal(replacement.attachedId, null);
   } finally {
@@ -217,8 +220,8 @@ async function testFlagRestartRoundTrip(): Promise<void> {
     for (const session of manager?.sessions ?? []) session.term.dispose();
     for (const session of replacement?.sessions ?? []) session.term.dispose();
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
-    if (previousCommand === undefined) delete process.env.DEVIN_CONDUCTOR_CMD;
-    else process.env.DEVIN_CONDUCTOR_CMD = previousCommand;
+    if (previousCommand === undefined) delete process.env.ENVOY_CMD;
+    else process.env.ENVOY_CMD = previousCommand;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }

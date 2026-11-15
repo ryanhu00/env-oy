@@ -1,13 +1,18 @@
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import type { Notification, NotificationType, SessionStatus } from './session';
+import { defaultDataDir } from './paths';
+import { ADAPTER_IDS, sessionKey } from './adapters/types';
+import type { AdapterId } from './adapters/types';
 
-export const RESTART_STATE_VERSION = 1;
+export const RESTART_STATE_VERSION = 2;
+/** Version-1 handoffs (Devin only, `devinSessionId`) are still readable and upgraded on write. */
+const LEGACY_RESTART_STATE_VERSION = 1;
 export const RESTART_CHANNEL_PREFIX = 'restart-channel-';
 
 export interface RestartSessionState {
-  devinSessionId: string;
+  adapterId: AdapterId;
+  cliSessionId: string;
   cwd: string;
   name: string;
   tag: string;
@@ -18,6 +23,7 @@ export interface RestartSessionState {
 
 export interface RestartState {
   version: typeof RESTART_STATE_VERSION;
+  /** Session key (see `sessionKey`) of the selected ACTIVE session. */
   selectedSessionId: string | null;
   sessions: RestartSessionState[];
   lastPromptAt?: number;
@@ -43,12 +49,16 @@ function validateNotification(value: unknown): Notification | null {
  * Validates one resumable ACTIVE-session record against current tags.
  * @param value Parsed JSON value to inspect.
  * @param tags Current canonical tags allowed during restore.
+ * @param legacy True for version-1 records, which are Devin-only and use `devinSessionId`.
  * @returns A safe copied record, or null when any field is invalid.
  */
-function validateSession(value: unknown, tags: ReadonlySet<string>): RestartSessionState | null {
+function validateSession(value: unknown, tags: ReadonlySet<string>, legacy: boolean): RestartSessionState | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
-  if (typeof record.devinSessionId !== 'string' || !record.devinSessionId.trim() || record.devinSessionId !== record.devinSessionId.trim()) return null;
+  const adapterId = legacy ? 'devin' : record.adapterId;
+  if (typeof adapterId !== 'string' || !ADAPTER_IDS.includes(adapterId as AdapterId)) return null;
+  const cliSessionId = legacy ? record.devinSessionId : record.cliSessionId;
+  if (typeof cliSessionId !== 'string' || !cliSessionId.trim() || cliSessionId !== cliSessionId.trim()) return null;
   if (typeof record.cwd !== 'string' || !record.cwd.trim()) return null;
   if (typeof record.name !== 'string' || !record.name.trim()) return null;
   if (typeof record.tag !== 'string' || !record.tag.trim() || !tags.has(record.tag)) return null;
@@ -58,19 +68,21 @@ function validateSession(value: unknown, tags: ReadonlySet<string>): RestartSess
   const unread = record.unread.map(validateNotification);
   if (unread.some((entry) => entry === null)) return null;
   return {
-    devinSessionId: record.devinSessionId,
+    adapterId: adapterId as AdapterId,
+    cliSessionId,
     cwd: record.cwd,
     name: record.name,
     tag: record.tag,
     unread: unread as Notification[],
     status: record.status as Exclude<SessionStatus, 'exited'>,
-    // absent stays absent so version-1 handoffs round-trip byte-identically
+    // absent stays absent so older handoffs round-trip without gaining fields
     ...(record.markedDone === undefined ? {} : { markedDone: record.markedDone as boolean }),
   };
 }
 
 /**
- * Validates a complete versioned handoff while skipping malformed session records.
+ * Validates a complete versioned handoff (current or version-1) while skipping malformed
+ * session records; the result is always the current version.
  * @param value Parsed JSON value to inspect.
  * @param tags Current canonical tags allowed during restore.
  * @returns Sanitized state, or null when the top-level schema/version is invalid.
@@ -78,7 +90,8 @@ function validateSession(value: unknown, tags: ReadonlySet<string>): RestartSess
 export function validateRestartState(value: unknown, tags: readonly string[]): RestartState | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
-  if (record.version !== RESTART_STATE_VERSION || !Array.isArray(record.sessions)) return null;
+  if ((record.version !== RESTART_STATE_VERSION && record.version !== LEGACY_RESTART_STATE_VERSION) || !Array.isArray(record.sessions)) return null;
+  const legacy = record.version === LEGACY_RESTART_STATE_VERSION;
   const selectedSessionId = record.selectedSessionId === null
     ? null
     : typeof record.selectedSessionId === 'string' && record.selectedSessionId.trim() && record.selectedSessionId === record.selectedSessionId.trim()
@@ -88,9 +101,11 @@ export function validateRestartState(value: unknown, tags: readonly string[]): R
   const sessions: RestartSessionState[] = [];
   const allowedTags = new Set(tags);
   for (const value of record.sessions) {
-    const session = validateSession(value, allowedTags);
-    if (!session || seen.has(session.devinSessionId)) continue;
-    seen.add(session.devinSessionId);
+    const session = validateSession(value, allowedTags, legacy);
+    if (!session) continue;
+    const key = sessionKey(session.adapterId, session.cliSessionId);
+    if (seen.has(key)) continue;
+    seen.add(key);
     sessions.push(session);
   }
   const lastPromptAt = typeof record.lastPromptAt === 'number' && Number.isFinite(record.lastPromptAt) && record.lastPromptAt >= 0 ? record.lastPromptAt : undefined;
@@ -98,7 +113,7 @@ export function validateRestartState(value: unknown, tags: readonly string[]): R
     version: RESTART_STATE_VERSION,
     selectedSessionId,
     sessions,
-    // absent stays absent so version-1 handoffs round-trip byte-identically
+    // absent stays absent so older handoffs round-trip without gaining fields
     ...(lastPromptAt === undefined ? {} : { lastPromptAt }),
   };
 }
@@ -109,7 +124,7 @@ export function validateRestartState(value: unknown, tags: readonly string[]): R
  * @param dataDir Expected private data directory; tests may provide an isolated directory.
  * @returns Normalized absolute channel path, or null when unavailable or unsafe.
  */
-export function validateRestartChannelPath(filePath: string | undefined, dataDir = path.join(os.homedir(), '.local', 'share', 'devin-conductor')): string | null {
+export function validateRestartChannelPath(filePath: string | undefined, dataDir = defaultDataDir()): string | null {
   if (!filePath || !path.isAbsolute(filePath)) return null;
   const root = path.resolve(dataDir);
   const target = path.resolve(filePath);
@@ -124,7 +139,7 @@ export function validateRestartChannelPath(filePath: string | undefined, dataDir
  * @param dataDir Expected private data directory; tests may provide an isolated directory.
  * @returns The validated absolute target path.
  */
-export function writeRestartState(state: RestartState, target: string, dataDir = path.join(os.homedir(), '.local', 'share', 'devin-conductor')): string {
+export function writeRestartState(state: RestartState, target: string, dataDir = defaultDataDir()): string {
   const channel = validateRestartChannelPath(target, dataDir);
   if (!channel) throw new Error('Invalid restart channel');
   const validated = validateRestartState(state, [...new Set(state.sessions.map((session) => session.tag))]);
@@ -150,7 +165,7 @@ export function writeRestartState(state: RestartState, target: string, dataDir =
 
 /**
  * Reads and immediately deletes one launcher channel before parsing and validation.
- * @param filePath Validated channel path received through DEVIN_CONDUCTOR_RESTART_CHANNEL.
+ * @param filePath Validated channel path received through ENVOY_RESTART_CHANNEL.
  * @param tags Current canonical tags allowed during restore.
  * @returns Sanitized state, or null after read, parse, or schema failure.
  */

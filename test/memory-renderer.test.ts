@@ -36,7 +36,8 @@ function createFixture(unread = false): {
     cwd: '/Users/example/projects/a-very-long-project-directory',
     tag: 'code',
     term: terminal,
-    devinSessionId: null,
+    adapterId: 'devin',
+    cliSessionId: null,
     memoryBytes: 1536 * 1024 ** 2,
     status: 'working',
     unread: unread ? [{ type: 'stop', ts: 1 }] : [],
@@ -46,6 +47,7 @@ function createFixture(unread = false): {
   const external: SidebarEntry = {
     kind: 'external',
     external: {
+      adapterId: 'devin',
       pid: 202,
       sessionId: 'external-id',
       cwd: '/Users/example/projects/external-long-directory',
@@ -60,7 +62,9 @@ function createFixture(unread = false): {
     attachedId: null,
     sessions: [active],
     lastPromptAt: Date.now() - 190_000,
-    discovery: { recents: [], totalMemoryBytes: 2304 * 1024 ** 2 },
+    discovery: { recents: [], totalMemoryBytes: 2304 * 1024 ** 2, memoryByAdapter: new Map() },
+    adapters: [{ id: 'devin', label: 'Devin', badge: 'DV' }],
+    badgeFor: (): string => '',
     tagStore: { tags: ['code'] },
     recentVisible: true,
     moveState: null,
@@ -216,7 +220,7 @@ async function testStatusSuffixAndTerminalLayout(): Promise<void> {
       () => {
         fixture.manager.attachedId = null;
         fixture.input.mode = 'form';
-        fixture.input.form = { field: 0, cwd: '/', name: '', error: '' };
+        fixture.input.form = { field: 0, cwd: '/', name: '', error: '', adapterId: 'devin' };
       },
       () => {
         fixture.input.mode = 'rename';
@@ -247,12 +251,12 @@ async function testStatusSuffixAndTerminalLayout(): Promise<void> {
     for (const configure of cases) {
       configure();
       renderer.invalidate();
-      assert.equal(stripAnsi(renderer.frame()).includes('PROMPT 3m ago · DEVIN 2.3 GB'), true);
+      assert.equal(stripAnsi(renderer.frame()).includes('PROMPT 3m ago · AGENTS 2.3 GB'), true);
     }
     fixture.manager.discovery.totalMemoryBytes = null;
     fixture.manager.lastPromptAt = null;
     renderer.invalidate();
-    assert.equal(stripAnsi(renderer.frame()).includes('PROMPT — · DEVIN —'), true);
+    assert.equal(stripAnsi(renderer.frame()).includes('PROMPT — · AGENTS —'), true);
     fixture.manager.discovery.totalMemoryBytes = 2304 * 1024 ** 2;
     fixture.manager.lastPromptAt = Date.now() - 190_000;
 
@@ -266,7 +270,7 @@ async function testStatusSuffixAndTerminalLayout(): Promise<void> {
     renderer.invalidate();
     await new Promise<void>((resolve) => host.write(renderer.frame(), resolve));
     for (let row = 0; row < 29; row++) assert.equal(host.buffer.active.getLine(row)?.getCell(34)?.getChars(), '│');
-    assert.equal(host.buffer.active.getLine(29)?.translateToString(true).endsWith('PROMPT 3m ago · DEVIN 2.3 GB'), true);
+    assert.equal(host.buffer.active.getLine(29)?.translateToString(true).endsWith('PROMPT 3m ago · AGENTS 2.3 GB'), true);
     host.dispose();
 
     Object.defineProperty(process.stdout, 'columns', { configurable: true, value: 5 });

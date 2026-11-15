@@ -37,7 +37,6 @@ exports.Renderer = exports.SIDEBAR_W = void 0;
 exports.formatMemory = formatMemory;
 exports.formatAgo = formatAgo;
 const path = __importStar(require("path"));
-const tasks_1 = require("../haein/tasks");
 const theme_1 = require("./theme");
 exports.SIDEBAR_W = 34;
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -252,18 +251,18 @@ function paneRow(term, y, width, scrollOffset) {
 function helpLines(width) {
     const raw = [
         [],
-        [[theme_1.BOLD + theme_1.ACCENT, '  devin-conductor']],
-        [[theme_1.FG, '  Run and switch between multiple Devin CLI sessions.']],
+        [[theme_1.BOLD + theme_1.ACCENT, '  Envoy']],
+        [[theme_1.FG, '  Run and switch between multiple agent CLI sessions (Devin, Claude, Codex).']],
         [],
-        [[theme_1.ACCENT, '  n          '], [theme_1.FG, 'create a new session, then choose its tag']],
+        [[theme_1.ACCENT, '  n          '], [theme_1.FG, 'create a new session (←/→ picks the CLI), then its tag']],
         [[theme_1.ACCENT, '  j / k      '], [theme_1.FG, 'move selection down / up (across all sections)']],
         [[theme_1.ACCENT, '  gg / G     '], [theme_1.FG, 'jump to top / bottom']],
         [[theme_1.ACCENT, '  Ctrl-u/d   '], [theme_1.FG, 'half page up / down']],
         [[theme_1.ACCENT, '  Enter      '], [theme_1.FG, 'ACTIVE attach · TERMINAL adopt/tag · RECENT resume/tag']],
         [[theme_1.ACCENT, '  m          '], [theme_1.FG, 'reorder the selected ACTIVE session within its tag']],
-        [[theme_1.ACCENT, '  r          '], [theme_1.FG, 'set a persistent dgui-only alias on any selected row']],
-        [[theme_1.ACCENT, '  H          '], [theme_1.FG, 'toggle RECENT rows for this dgui run']],
-        [[theme_1.ACCENT, '  R          '], [theme_1.FG, 'refresh dgui and reconnect all idle ACTIVE sessions']],
+        [[theme_1.ACCENT, '  r          '], [theme_1.FG, 'set a persistent Envoy-only alias on any selected row']],
+        [[theme_1.ACCENT, '  H          '], [theme_1.FG, 'toggle RECENT rows for this Envoy run']],
+        [[theme_1.ACCENT, '  R          '], [theme_1.FG, 'refresh Envoy and reconnect all idle ACTIVE sessions']],
         [[theme_1.ACCENT, '  d          '], [theme_1.FG, 'flag selected ACTIVE session as DONE — NEEDS YOU']],
         [[theme_1.ACCENT, '  x          '], [theme_1.FG, 'kill selected session (ACTIVE only)']],
         [[theme_1.ACCENT, '  q          '], [theme_1.FG, 'quit']],
@@ -274,17 +273,17 @@ function helpLines(width) {
         [[theme_1.DIM, '  Ctrl-q back to NORMAL. Sessions created via n start in INSERT.']],
         [],
         [[theme_1.DIM, '  Sections: ACTIVE sessions are grouped by ordered tags · RECENT']],
-        [[theme_1.DIM, '  sessions from the last 24h, resumable via devin -r · TERMINAL']],
+        [[theme_1.DIM, '  sessions from the last 24h, resumable via each CLI · TERMINAL']],
         [[theme_1.DIM, '  REPLs running in other windows (⇄, read-only until adopted).']],
         [[theme_1.DIM, '  ACTIVE/TERMINAL memory is main-process RSS, refreshed every 5s.']],
-        [[theme_1.DIM, '  The bottom DEVIN total excludes child processes and dgui itself.']],
+        [[theme_1.DIM, '  The bottom AGENTS total excludes child processes and Envoy itself.']],
         [[theme_1.DIM, '  Creating, resuming and adopting always asks for a required tag.']],
-        [[theme_1.DIM, '  Hiding RECENT is run-local; dgui restart/refresh shows it again.']],
+        [[theme_1.DIM, '  Hiding RECENT is run-local; Envoy restart/refresh shows it again.']],
         [[theme_1.DIM, '  MOVE: j/k one slot · gg/G first/last · Enter save · Esc cancel.']],
-        [[theme_1.DIM, '  Saved order uses real Devin ids and survives conductor restarts.']],
-        [[theme_1.DIM, '  RENAME is dgui-only, persists by real id, and blank clears it.']],
+        [[theme_1.DIM, '  Saved order uses real session ids and survives Envoy restarts.']],
+        [[theme_1.DIM, '  RENAME is Envoy-only, persists by real id, and blank clears it.']],
         [[theme_1.DIM, '  REFRESH always confirms, requires every live ACTIVE session to be']],
-        [[theme_1.DIM, '  idle with a Devin ID, and loses drafts plus local scrollback.']],
+        [[theme_1.DIM, '  idle with a session ID, and loses drafts plus local scrollback.']],
         [],
         [[theme_1.DIM, '  Adopting a TERMINAL session closes it in its own window']],
         [[theme_1.DIM, '  (SIGTERM), then resumes it here with exclusive ownership.']],
@@ -292,13 +291,16 @@ function helpLines(width) {
         [[theme_1.FG, '  Status:  '], [theme_1.BOLD + theme_1.ACCENT, '⠋ '], [theme_1.FG, 'WORKING   '], [theme_1.DIM, '○ '], [theme_1.FG, 'IDLE']],
         [[theme_1.FG, '           '], [theme_1.BOLD + theme_1.WARN, '◆ '], [theme_1.FG, 'DONE — NEEDS YOU   '], [theme_1.BOLD + theme_1.ERROR, '! '], [theme_1.FG, 'PERMISSION NEEDED']],
         [[theme_1.FG, '           '], [theme_1.DIM, '× '], [theme_1.FG, 'EXITED   '], [theme_1.DIM, '× '], [theme_1.FG, 'EXITED — NEEDS YOU']],
-        [[theme_1.DIM, '  WORKING starts only after Devin submits a prompt, not on keyboard input.']],
+        [[theme_1.DIM, '  WORKING starts only after the CLI submits a prompt, not on keyboard input.']],
         [],
         [[theme_1.DIM, '  Unread badges (●N) and highlighted rows appear when a session']],
         [[theme_1.DIM, '  finishes a turn, requests permission, or exits while you are away.']],
         [],
         [[theme_1.DIM, '  New-session dir defaults to "default_cwd" from']],
-        [[theme_1.DIM, '  ~/.config/devin-conductor/config.json (fallback: launch dir).']],
+        [[theme_1.DIM, '  ~/.config/envoy/config.json (fallback: launch dir).']],
+        [[theme_1.DIM, '  Config keys: "enabled_adapters", "default_adapter",']],
+        [[theme_1.DIM, '  "adapter_commands", "recent_limit" (CLIs on PATH are enabled']],
+        [[theme_1.DIM, '  by default; RECENT slots are shared fairly across CLIs).']],
     ];
     return raw.map((segs) => {
         let out = '';
@@ -316,7 +318,6 @@ class Renderer {
     manager;
     input;
     home;
-    haein;
     scroll = 0;
     renderTimer = null;
     animationTimer = null;
@@ -333,11 +334,10 @@ class Renderer {
      * @param input Source of the current mode plus form/confirm state.
      * @param home User home directory for ~ abbreviation in the sidebar.
      */
-    constructor(manager, input, home, haein) {
+    constructor(manager, input, home) {
         this.manager = manager;
         this.input = input;
         this.home = home;
-        this.haein = haein;
     }
     /**
      * Schedules a line-diff redraw at up to ~30fps and starts or settles working animation.
@@ -417,15 +417,11 @@ class Renderer {
         const rows = process.stdout.rows || 24;
         const paneW = Math.max(2, cols - exports.SIDEBAR_W - 1);
         const paneH = Math.max(2, rows - 1);
-        const side = this.haein ? this.haeinSidebarLines(paneH) : this.sidebarLines(paneH);
+        const side = this.sidebarLines(paneH);
         const att = this.manager.attachedSession;
-        const shown = this.input.mode === 'attached' && att ? att : this.haein ? this.haein.selectedSession : this.manager.selectedSession;
+        const shown = this.input.mode === 'attached' && att ? att : this.manager.selectedSession;
         let paneText = null;
-        if (this.input.mode === 'haein-tag' && this.haein?.tagEdit)
-            paneText = this.haeinTagLines(paneW);
-        else if (this.haein && !shown)
-            paneText = this.haeinDetailLines(paneW);
-        else if (this.input.mode === 'form' && this.input.form)
+        if (this.input.mode === 'form' && this.input.form)
             paneText = this.formLines(paneW);
         else if (this.input.mode === 'rename' && this.input.rename)
             paneText = this.renameLines(paneW);
@@ -451,22 +447,23 @@ class Renderer {
         const recentHiddenLabel = ` RECENT HIDDEN (${this.manager.discovery.recents.length})`;
         const totalMemory = formatMemory(this.manager.discovery.totalMemoryBytes);
         const lastPrompt = formatAgo(this.manager.lastPromptAt);
-        const suffixPlain = `PROMPT ${lastPrompt} · DEVIN ${totalMemory}`;
+        // with several CLIs enabled, break the total down per CLI (only CLIs with live REPLs);
+        // the breakdown is dropped when it would crowd out the mode hints
+        const perCli = this.manager.adapters.length > 1
+            ? this.manager.adapters
+                .filter((adapter) => (this.manager.discovery.memoryByAdapter.get(adapter.id) ?? 0) > 0)
+                .map((adapter) => `${adapter.badge} ${formatMemory(this.manager.discovery.memoryByAdapter.get(adapter.id))}`)
+            : [];
+        const baseSuffix = `PROMPT ${lastPrompt} · AGENTS ${totalMemory}`;
+        const breakdown = perCli.length > 0 && baseSuffix.length + 3 + perCli.join(' · ').length <= cols * 0.5 ? ` (${perCli.join(' · ')})` : '';
+        const suffixPlain = baseSuffix + breakdown;
         const suffixWidth = Math.min(cols, suffixPlain.length);
         const barWidth = Math.max(0, cols - suffixWidth);
         const suffix = suffixWidth === suffixPlain.length
-            ? theme_1.DIM + 'PROMPT ' + theme_1.ACCENT + lastPrompt + theme_1.DIM + ' · DEVIN ' + theme_1.ACCENT + totalMemory
+            ? theme_1.DIM + 'PROMPT ' + theme_1.ACCENT + lastPrompt + theme_1.DIM + ' · AGENTS ' + theme_1.ACCENT + totalMemory + (breakdown ? theme_1.DIM + breakdown : '')
             : theme_1.DIM + fit(suffixPlain, suffixWidth);
         if (this.input.mode === 'confirm' && this.input.confirm)
             bar = theme_1.WARN + fit(` ${this.input.confirm.question} [y/n]`, barWidth);
-        else if (this.haein && this.input.mode === 'haein-tag')
-            bar = statusSegment(' HAEIN TAG', ' · type · Enter save · Esc cancel', barWidth);
-        else if (this.haein && this.haein.notice)
-            bar = theme_1.ERROR + fit(` ${this.haein.notice}`, barWidth);
-        else if (this.haein && this.haein.store.notice)
-            bar = theme_1.WARN + fit(` ${this.haein.store.notice}`, barWidth);
-        else if (this.haein)
-            bar = statusSegment(' HAEIN', ' · j/k move · Enter launch/attach · g grouping · t tag · q quit', barWidth);
         else if (this.input.mode === 'move' && this.manager.moveState)
             bar = statusSegment(' MOVE', ` · #${this.manager.moveState.tag} · j/k reorder · gg/G first/last · Enter save · Esc cancel`, barWidth);
         else if (this.input.mode === 'attached' && att && this.input.attachedMode === 'insert')
@@ -476,7 +473,7 @@ class Renderer {
                 ? theme_1.ERROR + fit(` ${this.input.notice}`, barWidth)
                 : statusSegment(' NORMAL', `${offset > 0 ? ` · ↑${offset}` : ''} · ${this.manager.displayName(att)} · ${att.status} · j/k scroll · gg/G top/bottom · p last prompt · i insert · Ctrl-q sidebar`, barWidth);
         else if (this.input.mode === 'form')
-            bar = statusSegment(' NEW SESSION', ' · Enter next/tag · Tab switch field · Esc cancel', barWidth);
+            bar = statusSegment(' NEW SESSION', ` · Enter next/tag · Tab switch field${this.manager.adapters.length > 1 ? ' · ←/→ CLI' : ''} · Esc cancel`, barWidth);
         else if (this.input.mode === 'rename')
             bar = statusSegment(' RENAME', ' · type or paste · Enter save (blank clears) · Esc cancel', barWidth);
         else if (this.input.mode === 'tag-picker')
@@ -514,47 +511,6 @@ class Renderer {
         }
         return out;
     }
-    /** Builds the Haein task sidebar using its grouping preference and task-stage metadata. */
-    haeinSidebarLines(height) {
-        const runtime = this.haein;
-        const lines = [theme_1.BG + theme_1.BOLD + theme_1.ACCENT + fit(' devin-conductor · Haein', exports.SIDEBAR_W) + theme_1.RESET, theme_1.BG + theme_1.RULE + '─'.repeat(exports.SIDEBAR_W) + theme_1.RESET];
-        const body = [];
-        let row = 0;
-        for (const group of (0, tasks_1.groupTasks)(runtime.store.tasks, runtime.grouping)) {
-            body.push(theme_1.BG + theme_1.BOLD + theme_1.DIM + fit(` ${group.label}`, exports.SIDEBAR_W) + theme_1.RESET);
-            for (const task of group.tasks) {
-                const selected = row === runtime.selected;
-                const session = runtime.selectedTask?.id === task.id ? runtime.selectedSession : undefined;
-                const marker = selected ? theme_1.ACCENT + '›' : ' ';
-                const state = session ? theme_1.OK + '▶' : task.attention ? theme_1.WARN + '!' : theme_1.DIM + '○';
-                const style = selected ? theme_1.FG_BRIGHT : theme_1.FG;
-                body.push((selected ? theme_1.BG_SELECT : theme_1.BG) + marker + ' ' + state + ' ' + style + fit(task.title || task.id, exports.SIDEBAR_W - 4) + theme_1.RESET);
-                body.push((selected ? theme_1.BG_SELECT : theme_1.BG) + theme_1.DIM + fit(`    ${task.agent} · ${task.attention || task.branch || task.stage}`, exports.SIDEBAR_W) + theme_1.RESET);
-                body.push(theme_1.BG + ' '.repeat(exports.SIDEBAR_W) + theme_1.RESET);
-                row++;
-            }
-        }
-        lines.push(...body.slice(0, Math.max(0, height - 2)));
-        while (lines.length < height)
-            lines.push(theme_1.BG + ' '.repeat(exports.SIDEBAR_W) + theme_1.RESET);
-        return lines.slice(0, height);
-    }
-    /** Renders selected Haein metadata when Conductor does not own that task's PTY. */
-    haeinDetailLines(width) {
-        const task = this.haein.selectedTask;
-        if (!task)
-            return ['', '  ' + theme_1.BOLD + theme_1.ACCENT + 'Waiting for Haein tasks…' + theme_1.RESET, '', '  ' + theme_1.DIM + 'Check the Haein socket/service and wait for refresh.' + theme_1.RESET];
-        const attention = task.attention ? ['  ' + theme_1.WARN + fit(`Attention: ${task.attention}`, Math.max(1, width - 2)) + theme_1.RESET] : [];
-        const agentPid = task.agentPid > 0 ? ['  ' + theme_1.DIM + `Agent PID: ${task.agentPid}` + theme_1.RESET] : [];
-        return ['', '  ' + theme_1.BOLD + theme_1.ACCENT + fit(task.title || task.id, Math.max(1, width - 2)) + theme_1.RESET, '', '  ' + theme_1.DIM + `Stage: ${task.stage}` + theme_1.RESET, '  ' + theme_1.DIM + `Agent: ${task.agent}` + theme_1.RESET, ...attention, ...agentPid, '  ' + theme_1.DIM + fit(`Worktree: ${task.worktree}`, Math.max(1, width - 2)) + theme_1.RESET, '  ' + theme_1.DIM + `Tag: ${task.tag || 'Untagged'}` + theme_1.RESET, '', '  ' + theme_1.FG + 'Press Enter to launch or attach a Conductor-owned agent PTY.' + theme_1.RESET, '  ' + theme_1.DIM + 'Detached agents remain owned by Haein and are never taken over.' + theme_1.RESET];
-    }
-    /** Renders Haein's compact tag text-entry prompt. */
-    haeinTagLines(width) {
-        const edit = this.haein.tagEdit;
-        const budget = Math.max(4, width - 8);
-        const value = edit.value.length > budget ? '…' + edit.value.slice(-(budget - 1)) : edit.value;
-        return ['', '  ' + theme_1.BOLD + theme_1.ACCENT + `Tag: ${edit.task.title}` + theme_1.RESET, '', '  ' + theme_1.ACCENT + '❯ ' + theme_1.FG_BRIGHT + value + theme_1.CURSOR + ' ' + theme_1.RESET, '', edit.error ? '  ' + theme_1.ERROR + fit(edit.error, Math.max(1, width - 2)) + theme_1.RESET : ''];
-    }
     /**
      * Builds the sidebar as exactly `height` ANSI strings of SIDEBAR_W visible columns:
      * a title, a rule, then section headers (ACTIVE/RECENT/TERMINAL, only when non-empty),
@@ -567,7 +523,7 @@ class Renderer {
      */
     sidebarLines(height) {
         const lines = [
-            theme_1.BG + theme_1.BOLD + theme_1.ACCENT + fit(' devin-conductor', exports.SIDEBAR_W) + theme_1.RESET,
+            theme_1.BG + theme_1.BOLD + theme_1.ACCENT + fit(' Envoy', exports.SIDEBAR_W) + theme_1.RESET,
             theme_1.BG + theme_1.RULE + '─'.repeat(exports.SIDEBAR_W) + theme_1.RESET,
         ];
         const entries = this.manager.entries;
@@ -635,7 +591,8 @@ class Renderer {
                 }
                 const statusText = `${sprite} ${label}`;
                 const memory = formatMemory(s.memoryBytes);
-                const dir = shortDir(s.cwd, exports.SIDEBAR_W - 7 - memory.length, this.home);
+                const cli = this.manager.badgeFor(s.adapterId) ? ` · ${this.manager.badgeFor(s.adapterId)}` : '';
+                const dir = shortDir(s.cwd, exports.SIDEBAR_W - 7 - memory.length - cli.length, this.home);
                 icon = statusStyle + sprite;
                 name = this.manager.displayName(s);
                 if (unread || flagged) {
@@ -647,23 +604,25 @@ class Renderer {
                 else if (s.status === 'exited')
                     nameStyle = theme_1.DIM;
                 details = [
-                    theme_1.DIM + fit(`    ${dir} · ${memory}`, exports.SIDEBAR_W),
+                    theme_1.DIM + fit(`    ${dir} · ${memory}${cli}`, exports.SIDEBAR_W),
                     theme_1.DIM + '    ' + statusStyle + statusText + ' '.repeat(Math.max(0, exports.SIDEBAR_W - 4 - statusText.length)),
                 ];
             }
             else if (e.kind === 'external') {
                 const memory = formatMemory(e.external.memoryBytes);
+                const cli = this.manager.badgeFor(e.external.adapterId) ? ` · ${this.manager.badgeFor(e.external.adapterId)}` : '';
                 icon = theme_1.EXTERNAL + '⇄';
                 name = this.manager.displayName(e);
                 details = [
-                    theme_1.DIM + fit(`    ${shortDir(e.external.cwd, exports.SIDEBAR_W - 7 - memory.length, this.home)} · ${memory}`, exports.SIDEBAR_W),
+                    theme_1.DIM + fit(`    ${shortDir(e.external.cwd, exports.SIDEBAR_W - 7 - memory.length - cli.length, this.home)} · ${memory}${cli}`, exports.SIDEBAR_W),
                     theme_1.DIM + fit('    terminal', exports.SIDEBAR_W),
                 ];
             }
             else {
+                const cli = this.manager.badgeFor(e.recent.adapterId) ? ` · ${this.manager.badgeFor(e.recent.adapterId)}` : '';
                 icon = theme_1.RECENT + '↺';
                 name = this.manager.displayName(e);
-                details = [theme_1.DIM + fit(`    ${shortDir(e.recent.cwd, exports.SIDEBAR_W - 7 - e.recent.lastAgo.length, this.home)} · ${e.recent.lastAgo}`, exports.SIDEBAR_W)];
+                details = [theme_1.DIM + fit(`    ${shortDir(e.recent.cwd, exports.SIDEBAR_W - 7 - e.recent.lastAgo.length - cli.length, this.home)} · ${e.recent.lastAgo}${cli}`, exports.SIDEBAR_W)];
             }
             const nameW = exports.SIDEBAR_W - 4 - (badge ? badge.length + 1 : 0);
             const nameLines = selected || e.kind === 'active' ? wrap(name, nameW, exports.SIDEBAR_W - 4, 4) : [name];
@@ -690,7 +649,7 @@ class Renderer {
         return lines.slice(0, height);
     }
     /**
-     * Renders dgui alias editing with stable target/original context and validation feedback.
+     * Renders envoy alias editing with stable target/original context and validation feedback.
      * @param width Right-pane width used to tail-clip the field and clip hints.
      * @returns ANSI rows for the rename pane.
      */
@@ -702,13 +661,13 @@ class Renderer {
             '',
             '  ' + theme_1.BOLD + theme_1.ACCENT + 'Rename session' + theme_1.RESET,
             '',
-            '  ' + theme_1.DIM + fit(`${state.section} · ${state.target.kind === 'active' ? state.target.session.devinSessionId ?? 'Devin ID pending' : state.target.sessionId}`, Math.max(0, width - 2)) + theme_1.RESET,
+            '  ' + theme_1.DIM + fit(`${state.section} · ${state.target.kind === 'active' ? state.target.session.cliSessionId ?? 'Session ID pending' : state.target.sessionId}`, Math.max(0, width - 2)) + theme_1.RESET,
             '  ' + theme_1.DIM + fit(`Original: ${state.original}`, Math.max(0, width - 2)) + theme_1.RESET,
             '',
-            '  ' + theme_1.DIM + 'dgui alias (maximum 120 characters):' + theme_1.RESET,
+            '  ' + theme_1.DIM + 'Envoy alias (maximum 120 characters):' + theme_1.RESET,
             '  ' + theme_1.ACCENT + '❯ ' + theme_1.FG_BRIGHT + shown + theme_1.CURSOR + ' ' + theme_1.RESET,
             '',
-            '  ' + theme_1.DIM + fit('Blank saves no alias and shows the Devin title/session ID.', Math.max(0, width - 2)) + theme_1.RESET,
+            '  ' + theme_1.DIM + fit('Blank saves no alias and shows the CLI title/session ID.', Math.max(0, width - 2)) + theme_1.RESET,
             '',
             state.error ? '  ' + theme_1.ERROR + state.error.slice(0, Math.max(0, width - 3)) + theme_1.RESET : '',
         ];
@@ -788,10 +747,18 @@ class Renderer {
         const budget = Math.max(4, width - 8);
         const cwdShown = f.cwd.length > budget ? '…' + f.cwd.slice(-(budget - 1)) : f.cwd;
         const nameShown = f.name.length > budget ? '…' + f.name.slice(-(budget - 1)) : f.name;
+        const cliRows = this.manager.adapters.length > 1
+            ? [
+                '  ' + theme_1.DIM + 'CLI (← / → to change):' + theme_1.RESET,
+                '  ' + this.manager.adapters.map((adapter) => (adapter.id === f.adapterId ? theme_1.BOLD + theme_1.ACCENT + `[${adapter.label}]` : theme_1.DIM + ` ${adapter.label} `) + theme_1.RESET).join(' '),
+                '',
+            ]
+            : [];
         return [
             '',
             '  ' + theme_1.BOLD + theme_1.ACCENT + 'New session' + theme_1.RESET,
             '',
+            ...cliRows,
             '  ' + theme_1.DIM + 'Working directory (~ ok):' + theme_1.RESET,
             '  ' + (f.field === 0 ? theme_1.ACCENT + '❯ ' : '  ') + theme_1.FG_BRIGHT + cwdShown + (f.field === 0 ? theme_1.CURSOR + ' ' : '') + theme_1.RESET,
             '',

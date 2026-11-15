@@ -37,6 +37,9 @@ exports.TagStore = exports.SESSION_ALIAS_MAX_LENGTH = exports.SEEDED_TAGS = void
 const fs = __importStar(require("fs"));
 const os = __importStar(require("os"));
 const path = __importStar(require("path"));
+const types_1 = require("./adapters/types");
+const discovery_1 = require("./discovery");
+const paths_1 = require("./paths");
 exports.SEEDED_TAGS = ['investigation', 'planning', 'code', 'chat'];
 exports.SESSION_ALIAS_MAX_LENGTH = 120;
 class TagStore {
@@ -46,11 +49,11 @@ class TagStore {
     sessionAliases = Object.create(null);
     config;
     /**
-     * Loads tags, real-id order and valid dgui aliases while retaining unrelated config keys.
+     * Loads tags, real-id order and valid envoy aliases while retaining unrelated config keys.
      * @param configPath Config file path; tests may provide an isolated location.
-     * @returns A store used as the sole conductor-config writer.
+     * @returns A store used as the sole envoy-config writer.
      */
-    constructor(configPath = path.join(os.homedir(), '.config', 'devin-conductor', 'config.json')) {
+    constructor(configPath = (0, paths_1.defaultConfigPath)()) {
         this.configPath = configPath;
         let parsed = {};
         try {
@@ -95,16 +98,45 @@ class TagStore {
     get tags() {
         return this.ordered;
     }
-    /** Returns the Haein-only sidebar grouping preference, defaulting to pipeline stages. */
-    get haeinSidebarGrouping() {
-        return this.config.haein_sidebar_grouping === 'tag' ? 'tag' : 'pipeline_stage';
-    }
-    /** Persists the Haein-only sidebar grouping without changing normal-mode tag settings. */
-    setHaeinSidebarGrouping(grouping) {
-        this.persist({ ...this.config, tags: this.ordered, session_order: this.sessionOrder, session_aliases: this.sessionAliases, haein_sidebar_grouping: grouping });
+    /**
+     * Reads the CLI preferences from the config: `enabled_adapters` (list of CLI ids),
+     * `default_adapter` (one id) and `adapter_commands` (id -> executable). Unknown ids and
+     * malformed values are ignored rather than failing startup.
+     * @returns Validated settings; fields are omitted when unset or invalid.
+     */
+    get adapterSettings() {
+        const known = (value) => typeof value === 'string' && types_1.ADAPTER_IDS.includes(value);
+        const settings = {};
+        const enabled = this.config.enabled_adapters;
+        if (Array.isArray(enabled)) {
+            const ids = [...new Set(enabled.filter(known))];
+            if (ids.length > 0)
+                settings.enabled = ids;
+        }
+        if (known(this.config.default_adapter))
+            settings.default = this.config.default_adapter;
+        const commands = this.config.adapter_commands;
+        if (typeof commands === 'object' && commands !== null && !Array.isArray(commands)) {
+            const valid = {};
+            for (const [id, value] of Object.entries(commands)) {
+                if (known(id) && typeof value === 'string' && value.trim())
+                    valid[id] = value.trim().replace(/^~(?=$|\/)/, os.homedir());
+            }
+            if (Object.keys(valid).length > 0)
+                settings.commands = valid;
+        }
+        return settings;
     }
     /**
-     * Returns persisted real Devin ids for one tag in relative sidebar order.
+     * Maximum RECENT rows across all CLIs, from `recent_limit` (a whole number from 1 to 100).
+     * @returns The configured limit, or 10 when unset or invalid.
+     */
+    get recentLimit() {
+        const value = this.config.recent_limit;
+        return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 100 ? value : discovery_1.DEFAULT_RECENT_LIMIT;
+    }
+    /**
+     * Returns persisted session keys for one tag in relative sidebar order.
      * @param tag Canonical session tag whose saved order is requested.
      * @returns Copy of the saved id list, or an empty array when none is valid.
      */
@@ -112,22 +144,22 @@ class TagStore {
         return [...(this.sessionOrder[tag] ?? [])];
     }
     /**
-     * Looks up a persisted dgui-only alias by real Devin session id.
-     * @param id Real Devin session id used by discovery and resume.
+     * Looks up a persisted envoy-only alias by session key.
+     * @param id Session key (see `sessionKey`) used by discovery and resume.
      * @returns The alias, or undefined when the original title should be shown.
      */
     getSessionAlias(id) {
         return this.sessionAliases[id];
     }
     /**
-     * Validates and atomically sets or clears one real-id dgui alias.
-     * @param id Non-empty real Devin session id; conductor ids and pids must not be supplied.
+     * Validates and atomically sets or clears one real-id envoy alias.
+     * @param id Non-empty session key; Envoy ids and pids must not be supplied.
      * @param value Raw alias; trimming to blank clears it.
      * @returns The trimmed alias, or undefined after a clear.
      */
     setSessionAlias(id, value) {
         if (!id.trim() || id !== id.trim())
-            throw new Error('A real Devin session ID is required');
+            throw new Error('A real session ID is required');
         const alias = value.trim();
         if (alias.length > exports.SESSION_ALIAS_MAX_LENGTH)
             throw new Error(`Alias must be ${exports.SESSION_ALIAS_MAX_LENGTH} characters or fewer`);
@@ -172,9 +204,9 @@ class TagStore {
         return tag;
     }
     /**
-     * Associates one real Devin id with its selected tag, removing stale copies from every
+     * Associates one session key with its selected tag, removing stale copies from every
      * other tag while retaining an existing position in the selected list or appending it.
-     * @param id Non-empty real Devin session id discovered or supplied by resume.
+     * @param id Non-empty session key discovered or supplied by resume.
      * @param tag Canonical tag selected for the current run.
      * @returns Nothing.
      */
@@ -193,6 +225,28 @@ class TagStore {
         next[tag] = target;
         this.sessionOrder = next;
         this.persist({ ...this.config, tags: this.ordered, session_order: next, session_aliases: this.sessionAliases });
+    }
+    /**
+     * Moves a session's saved position to a new key and carries its alias over, used when a
+     * running REPL switches session id. The old alias is kept for the old session.
+     * @param from Session key being replaced.
+     * @param to Session key that now identifies the same sidebar row.
+     * @returns Nothing.
+     */
+    renameSessionKey(from, to) {
+        if (!from.trim() || from !== from.trim() || !to.trim() || to !== to.trim())
+            throw new Error('A real session ID is required');
+        if (from === to)
+            return;
+        const order = Object.create(null);
+        for (const [name, ids] of Object.entries(this.sessionOrder))
+            order[name] = [...new Set(ids.map((id) => (id === from ? to : id)))];
+        const aliases = { ...this.sessionAliases };
+        if (aliases[from] !== undefined && aliases[to] === undefined)
+            aliases[to] = aliases[from];
+        this.persist({ ...this.config, tags: this.ordered, session_order: order, session_aliases: aliases });
+        this.sessionOrder = order;
+        this.sessionAliases = aliases;
     }
     /**
      * Persists the current active real-id order for one tag, removing those ids from stale

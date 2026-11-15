@@ -39,9 +39,12 @@ exports.validateRestartChannelPath = validateRestartChannelPath;
 exports.writeRestartState = writeRestartState;
 exports.consumeRestartState = consumeRestartState;
 const fs = __importStar(require("fs"));
-const os = __importStar(require("os"));
 const path = __importStar(require("path"));
-exports.RESTART_STATE_VERSION = 1;
+const paths_1 = require("./paths");
+const types_1 = require("./adapters/types");
+exports.RESTART_STATE_VERSION = 2;
+/** Version-1 handoffs (Devin only, `devinSessionId`) are still readable and upgraded on write. */
+const LEGACY_RESTART_STATE_VERSION = 1;
 exports.RESTART_CHANNEL_PREFIX = 'restart-channel-';
 const NOTIFICATION_TYPES = new Set(['stop', 'permission', 'exit']);
 const RESTORABLE_STATUSES = new Set(['working', 'waiting', 'needs-permission']);
@@ -64,13 +67,18 @@ function validateNotification(value) {
  * Validates one resumable ACTIVE-session record against current tags.
  * @param value Parsed JSON value to inspect.
  * @param tags Current canonical tags allowed during restore.
+ * @param legacy True for version-1 records, which are Devin-only and use `devinSessionId`.
  * @returns A safe copied record, or null when any field is invalid.
  */
-function validateSession(value, tags) {
+function validateSession(value, tags, legacy) {
     if (typeof value !== 'object' || value === null || Array.isArray(value))
         return null;
     const record = value;
-    if (typeof record.devinSessionId !== 'string' || !record.devinSessionId.trim() || record.devinSessionId !== record.devinSessionId.trim())
+    const adapterId = legacy ? 'devin' : record.adapterId;
+    if (typeof adapterId !== 'string' || !types_1.ADAPTER_IDS.includes(adapterId))
+        return null;
+    const cliSessionId = legacy ? record.devinSessionId : record.cliSessionId;
+    if (typeof cliSessionId !== 'string' || !cliSessionId.trim() || cliSessionId !== cliSessionId.trim())
         return null;
     if (typeof record.cwd !== 'string' || !record.cwd.trim())
         return null;
@@ -88,18 +96,20 @@ function validateSession(value, tags) {
     if (unread.some((entry) => entry === null))
         return null;
     return {
-        devinSessionId: record.devinSessionId,
+        adapterId: adapterId,
+        cliSessionId,
         cwd: record.cwd,
         name: record.name,
         tag: record.tag,
         unread: unread,
         status: record.status,
-        // absent stays absent so version-1 handoffs round-trip byte-identically
+        // absent stays absent so older handoffs round-trip without gaining fields
         ...(record.markedDone === undefined ? {} : { markedDone: record.markedDone }),
     };
 }
 /**
- * Validates a complete versioned handoff while skipping malformed session records.
+ * Validates a complete versioned handoff (current or version-1) while skipping malformed
+ * session records; the result is always the current version.
  * @param value Parsed JSON value to inspect.
  * @param tags Current canonical tags allowed during restore.
  * @returns Sanitized state, or null when the top-level schema/version is invalid.
@@ -108,8 +118,9 @@ function validateRestartState(value, tags) {
     if (typeof value !== 'object' || value === null || Array.isArray(value))
         return null;
     const record = value;
-    if (record.version !== exports.RESTART_STATE_VERSION || !Array.isArray(record.sessions))
+    if ((record.version !== exports.RESTART_STATE_VERSION && record.version !== LEGACY_RESTART_STATE_VERSION) || !Array.isArray(record.sessions))
         return null;
+    const legacy = record.version === LEGACY_RESTART_STATE_VERSION;
     const selectedSessionId = record.selectedSessionId === null
         ? null
         : typeof record.selectedSessionId === 'string' && record.selectedSessionId.trim() && record.selectedSessionId === record.selectedSessionId.trim()
@@ -119,10 +130,13 @@ function validateRestartState(value, tags) {
     const sessions = [];
     const allowedTags = new Set(tags);
     for (const value of record.sessions) {
-        const session = validateSession(value, allowedTags);
-        if (!session || seen.has(session.devinSessionId))
+        const session = validateSession(value, allowedTags, legacy);
+        if (!session)
             continue;
-        seen.add(session.devinSessionId);
+        const key = (0, types_1.sessionKey)(session.adapterId, session.cliSessionId);
+        if (seen.has(key))
+            continue;
+        seen.add(key);
         sessions.push(session);
     }
     const lastPromptAt = typeof record.lastPromptAt === 'number' && Number.isFinite(record.lastPromptAt) && record.lastPromptAt >= 0 ? record.lastPromptAt : undefined;
@@ -130,7 +144,7 @@ function validateRestartState(value, tags) {
         version: exports.RESTART_STATE_VERSION,
         selectedSessionId,
         sessions,
-        // absent stays absent so version-1 handoffs round-trip byte-identically
+        // absent stays absent so older handoffs round-trip without gaining fields
         ...(lastPromptAt === undefined ? {} : { lastPromptAt }),
     };
 }
@@ -140,7 +154,7 @@ function validateRestartState(value, tags) {
  * @param dataDir Expected private data directory; tests may provide an isolated directory.
  * @returns Normalized absolute channel path, or null when unavailable or unsafe.
  */
-function validateRestartChannelPath(filePath, dataDir = path.join(os.homedir(), '.local', 'share', 'devin-conductor')) {
+function validateRestartChannelPath(filePath, dataDir = (0, paths_1.defaultDataDir)()) {
     if (!filePath || !path.isAbsolute(filePath))
         return null;
     const root = path.resolve(dataDir);
@@ -156,7 +170,7 @@ function validateRestartChannelPath(filePath, dataDir = path.join(os.homedir(), 
  * @param dataDir Expected private data directory; tests may provide an isolated directory.
  * @returns The validated absolute target path.
  */
-function writeRestartState(state, target, dataDir = path.join(os.homedir(), '.local', 'share', 'devin-conductor')) {
+function writeRestartState(state, target, dataDir = (0, paths_1.defaultDataDir)()) {
     const channel = validateRestartChannelPath(target, dataDir);
     if (!channel)
         throw new Error('Invalid restart channel');
@@ -186,7 +200,7 @@ function writeRestartState(state, target, dataDir = path.join(os.homedir(), '.lo
 }
 /**
  * Reads and immediately deletes one launcher channel before parsing and validation.
- * @param filePath Validated channel path received through DEVIN_CONDUCTOR_RESTART_CHANNEL.
+ * @param filePath Validated channel path received through ENVOY_RESTART_CHANNEL.
  * @param tags Current canonical tags allowed during restore.
  * @returns Sanitized state, or null after read, parse, or schema failure.
  */

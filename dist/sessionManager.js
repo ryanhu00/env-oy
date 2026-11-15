@@ -3,6 +3,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.SessionManager = void 0;
 const session_1 = require("./session");
 const discovery_1 = require("./discovery");
+const registry_1 = require("./adapters/registry");
+const payload_1 = require("./hooks/payload");
+const types_1 = require("./adapters/types");
 const restart_1 = require("./restart");
 const tags_1 = require("./tags");
 class SessionManager {
@@ -14,10 +17,12 @@ class SessionManager {
     attachedId = null;
     lastPromptAt = null;
     discovery;
-    resumedIds = new Set();
+    adapters;
+    defaultAdapterId;
+    adapterMap;
+    resumedKeys = new Set();
     runtimeOrder = new Map();
     pendingAliases = new WeakMap();
-    devinSessionCallbacks = new WeakMap();
     selectedIndex = 0;
     selectionTarget = null;
     selectionTouched = false;
@@ -31,17 +36,26 @@ class SessionManager {
      * Creates the manager holding all sessions plus selection/attachment state, wiring an
      * external/recent poller that also assigns real ids from its shared owned-process lsof map.
      * @param eventsDir Directory passed to each session for hook event delivery.
-     * @param discoveryDirs Directories always scanned by `devin list` (default cwd, launch cwd).
+     * @param discoveryDirs Directories always scanned when a CLI lists sessions per directory (default cwd, launch cwd).
      * @param tagStore Canonical tags and persisted per-tag real-id order.
      * @param onUpdate Invoked on any session/state change to schedule a redraw.
      * @param notifier Desktop notifier alerted whenever a session pushes an unread entry.
+     * @param adapters CLI adapters this manager can spawn and discover; defaults to the registry.
+     * @param defaultAdapterId CLI used for new sessions that do not name one; defaults to Devin when
+     * enabled, otherwise the first adapter.
+     * @param recentLimit Maximum RECENT rows across all CLIs; defaults to 10.
      */
-    constructor(eventsDir, discoveryDirs, tagStore, onUpdate, notifier) {
+    constructor(eventsDir, discoveryDirs, tagStore, onUpdate, notifier, adapters = (0, registry_1.createAdapters)(), defaultAdapterId, recentLimit) {
         this.eventsDir = eventsDir;
         this.tagStore = tagStore;
         this.onUpdate = onUpdate;
         this.notifier = notifier;
-        this.discovery = new discovery_1.Discovery(() => new Set(this.sessions.map((s) => s.pid)), () => this.resumedIds, discoveryDirs, (sessions) => this.assignDiscoveredSessionIds(sessions), () => {
+        this.adapters = adapters;
+        this.defaultAdapterId = defaultAdapterId && adapters.some((adapter) => adapter.id === defaultAdapterId)
+            ? defaultAdapterId
+            : adapters.some((adapter) => adapter.id === types_1.DEFAULT_ADAPTER_ID) ? types_1.DEFAULT_ADAPTER_ID : (adapters[0]?.id ?? types_1.DEFAULT_ADAPTER_ID);
+        this.adapterMap = new Map(adapters.map((adapter) => [adapter.id, adapter]));
+        this.discovery = new discovery_1.Discovery(() => new Set(this.sessions.map((s) => s.pid)), () => this.resumedKeys, discoveryDirs, (sessions) => this.assignDiscoveredSessionIds(sessions), () => {
             const firstRecentPopulation = !this.initialRecentPopulationSeen && this.discovery.recents.length > 0;
             if (firstRecentPopulation)
                 this.initialRecentPopulationSeen = true;
@@ -52,7 +66,35 @@ class SessionManager {
                 this.selectRenameTarget(this.selectionTarget);
             }
             this.onUpdate();
-        });
+        }, adapters, recentLimit);
+    }
+    /**
+     * Looks up a registered adapter.
+     * @param id Adapter identifier.
+     * @returns The adapter for that CLI; throws when it is not enabled.
+     */
+    adapterFor(id) {
+        const adapter = this.adapterMap.get(id);
+        if (!adapter)
+            throw new Error(`Unknown CLI adapter: ${id}`);
+        return adapter;
+    }
+    /**
+     * Short CLI badge for a row ("DV", "CL", "CX"), shown only when more than one CLI is enabled
+     * so single-CLI setups stay uncluttered.
+     * @param adapterId CLI that owns the row.
+     * @returns The badge, or '' when it should not be shown.
+     */
+    badgeFor(adapterId) {
+        return this.adapters.length > 1 ? this.adapterMap.get(adapterId)?.badge ?? '' : '';
+    }
+    /**
+     * Persistence key of an owned session once its real CLI id is known.
+     * @param session Owned session.
+     * @returns The adapter-scoped key, or null while the id is still unresolved.
+     */
+    keyOf(session) {
+        return session.cliSessionId ? (0, types_1.sessionKey)(session.adapterId, session.cliSessionId) : null;
     }
     /**
      * Gets the current sidebar row index used by input and rendering.
@@ -83,7 +125,9 @@ class SessionManager {
             ? null
             : entry.kind === 'active'
                 ? { kind: 'active', session: entry.session }
-                : { kind: 'discovered', sessionId: entry.kind === 'recent' ? entry.recent.sessionId : entry.external.sessionId };
+                : entry.kind === 'recent'
+                    ? { kind: 'discovered', adapterId: entry.recent.adapterId, sessionId: entry.recent.sessionId }
+                    : { kind: 'discovered', adapterId: entry.external.adapterId, sessionId: entry.external.sessionId };
         if (touched)
             this.selectionTouched = true;
     }
@@ -120,7 +164,7 @@ class SessionManager {
         if (selected?.kind === 'active')
             index = entries.findIndex((entry) => entry.kind === 'active' && entry.session === selected.session);
         else if (selected?.kind === 'external')
-            index = entries.findIndex((entry) => entry.kind === 'external' && entry.external.sessionId === selected.external.sessionId);
+            index = entries.findIndex((entry) => entry.kind === 'external' && entry.external.adapterId === selected.external.adapterId && entry.external.sessionId === selected.external.sessionId);
         else if (selected?.kind === 'recent' && !this.recentVisibility) {
             index = entries.findIndex((entry) => entry.kind === 'external');
             if (index < 0) {
@@ -142,18 +186,19 @@ class SessionManager {
      */
     displayName(target) {
         if (!('kind' in target)) {
-            const persisted = target.devinSessionId ? this.tagStore.getSessionAlias(target.devinSessionId) : undefined;
+            const key = this.keyOf(target);
+            const persisted = key ? this.tagStore.getSessionAlias(key) : undefined;
             return persisted ?? this.pendingAliases.get(target) ?? target.name;
         }
         if (target.kind === 'active')
             return this.displayName(target.session);
         if (target.kind === 'recent')
-            return this.tagStore.getSessionAlias(target.recent.sessionId) ?? (target.recent.title || target.recent.sessionId);
-        return this.tagStore.getSessionAlias(target.external.sessionId) ?? (target.external.title || target.external.sessionId);
+            return this.tagStore.getSessionAlias((0, types_1.sessionKey)(target.recent.adapterId, target.recent.sessionId)) ?? (target.recent.title || target.recent.sessionId);
+        return this.tagStore.getSessionAlias((0, types_1.sessionKey)(target.external.adapterId, target.external.sessionId)) ?? (target.external.title || target.external.sessionId);
     }
     /**
-     * Applies a trimmed dgui alias to a stable target without touching Devin or any PTY.
-     * @param target Owned Session reference or discovered real Devin id.
+     * Applies a trimmed envoy alias to a stable target without touching the CLI or any PTY.
+     * @param target Owned Session reference or discovered adapter + real session id.
      * @param value Raw field value; blank clears the alias and restores the source title.
      * @returns Validation/persistence error text, or null after success.
      */
@@ -162,15 +207,15 @@ class SessionManager {
         if (alias.length > tags_1.SESSION_ALIAS_MAX_LENGTH)
             return `Alias must be ${tags_1.SESSION_ALIAS_MAX_LENGTH} characters or fewer`;
         try {
-            if (target.kind === 'active' && !target.session.devinSessionId) {
+            if (target.kind === 'active' && !target.session.cliSessionId) {
                 if (alias)
                     this.pendingAliases.set(target.session, alias);
                 else
                     this.pendingAliases.delete(target.session);
             }
             else {
-                const id = target.kind === 'active' ? target.session.devinSessionId : target.sessionId;
-                this.tagStore.setSessionAlias(id, alias);
+                const key = target.kind === 'active' ? this.keyOf(target.session) : (0, types_1.sessionKey)(target.adapterId, target.sessionId);
+                this.tagStore.setSessionAlias(key, alias);
                 if (target.kind === 'active')
                     this.pendingAliases.delete(target.session);
             }
@@ -184,7 +229,7 @@ class SessionManager {
     }
     /**
      * Restores selection to a stable rename/discovery identity, falling back to a valid row.
-     * @param target Session reference or real Devin id, or null when no row was selected.
+     * @param target Session reference or adapter + real session id, or null when no row was selected.
      * @returns Nothing; rename completion and discovery refreshes use this method.
      */
     selectRenameTarget(target) {
@@ -192,7 +237,7 @@ class SessionManager {
         const index = target?.kind === 'active'
             ? entries.findIndex((entry) => entry.kind === 'active' && entry.session === target.session)
             : target
-                ? entries.findIndex((entry) => entry.kind !== 'active' && (entry.kind === 'recent' ? entry.recent.sessionId : entry.external.sessionId) === target.sessionId)
+                ? entries.findIndex((entry) => entry.kind !== 'active' && (entry.kind === 'recent' ? entry.recent : entry.external).adapterId === target.adapterId && (entry.kind === 'recent' ? entry.recent.sessionId : entry.external.sessionId) === target.sessionId)
                 : -1;
         this.setSelected(index >= 0 ? index : Math.max(0, Math.min(this.selectedIndex, Math.max(0, entries.length - 1))), false);
     }
@@ -243,33 +288,36 @@ class SessionManager {
      * @param cwd Absolute working directory for the PTY.
      * @param name Optional display name; auto-generates `session-N` when empty.
      * @param tag Required canonical ACTIVE group chosen before creation.
-     * @param resumeId Optional real Devin id, spawning `devin -r <id>` instead of a fresh REPL.
-     * @param options Optional non-attaching restored state used only during restart recovery.
+     * @param resumeId Optional real CLI session id, resuming it instead of starting a fresh REPL.
+     * @param options Optional adapter choice plus non-attaching restored state used during restart recovery.
      * @returns The newly created session.
      */
     create(cwd, name, tag, resumeId, options = {}) {
         if (!this.tagStore.tags.includes(tag))
             throw new Error(`Unknown session tag: ${tag}`);
+        const adapterId = options.adapterId ?? this.defaultAdapterId;
+        const adapter = this.adapterFor(adapterId);
         this.counter++;
         const id = `s${Date.now().toString(36)}-${this.counter}`;
         const displayName = name || `session-${this.counter}`;
         if (resumeId) {
-            this.resumedIds.add(resumeId);
-            this.tagStore.assignSessionTag(resumeId, tag);
+            const key = (0, types_1.sessionKey)(adapterId, resumeId);
+            this.resumedKeys.add(key);
+            this.tagStore.assignSessionTag(key, tag);
         }
         const s = new session_1.Session(id, displayName, cwd, tag, resumeId ?? null, this.paneCols, this.paneRows, this.eventsDir, () => {
             const e = this.entries[this.selected];
             if (s.id === this.attachedId || (e?.kind === 'active' && e.session === s))
                 this.onUpdate();
-        }, this.onUpdate, (type) => this.notifier.send(id, this.displayName(s), type), { extraArgs: resumeId ? ['-r', resumeId] : [], command: options.command, onExit: options.onExit, status: options.status, unread: options.unread, markedDone: options.markedDone });
+        }, this.onUpdate, (type) => this.notifier.send(id, this.displayName(s), type), { adapterId, command: options.command ?? [adapter.command(), ...(resumeId ? adapter.resumeArgs(resumeId) : adapter.freshArgs())], onExit: options.onExit, status: options.status, unread: options.unread, markedDone: options.markedDone });
         this.sessions.push(s);
-        if (options.onDevinSessionId)
-            this.devinSessionCallbacks.set(s, options.onDevinSessionId);
         const group = [...(this.runtimeOrder.get(tag) ?? []), s];
         const saved = this.tagStore.getSessionOrder(tag);
         group.sort((a, b) => {
-            const ai = a.devinSessionId ? saved.indexOf(a.devinSessionId) : -1;
-            const bi = b.devinSessionId ? saved.indexOf(b.devinSessionId) : -1;
+            const aKey = this.keyOf(a);
+            const bKey = this.keyOf(b);
+            const ai = aKey ? saved.indexOf(aKey) : -1;
+            const bi = bKey ? saved.indexOf(bKey) : -1;
             return (ai < 0 ? Number.MAX_SAFE_INTEGER : ai) - (bi < 0 ? Number.MAX_SAFE_INTEGER : bi);
         });
         this.runtimeOrder.set(tag, group);
@@ -284,7 +332,7 @@ class SessionManager {
         return s;
     }
     /**
-     * Checks whether every live ACTIVE session is idle and has a real Devin id.
+     * Checks whether every live ACTIVE session is idle and has a real CLI session id.
      * @returns Ready session count, or the exact first blocker notice for refresh UX.
      */
     getRefreshReadiness() {
@@ -295,23 +343,24 @@ class SessionManager {
         const permission = live.find((session) => session.status === 'needs-permission');
         if (permission)
             return { ready: false, message: `Cannot refresh: ${this.displayName(permission)} needs permission` };
-        const unresolved = live.find((session) => !session.devinSessionId);
+        const unresolved = live.find((session) => !session.cliSessionId);
         if (unresolved)
-            return { ready: false, message: `Cannot refresh: waiting for Devin ID for ${this.displayName(unresolved)}` };
+            return { ready: false, message: `Cannot refresh: waiting for session ID for ${this.displayName(unresolved)}` };
         return { ready: true, count: live.length };
     }
     /**
-     * Captures only resumable ACTIVE metadata needed by a replacement dgui process.
-     * @returns Versioned state ordered like the sidebar with an optional selected real id.
+     * Captures only resumable ACTIVE metadata needed by a replacement envoy process.
+     * @returns Versioned state ordered like the sidebar with an optional selected session key.
      */
     getRestartState() {
         const selected = this.entries[this.selected];
-        const selectedSessionId = selected?.kind === 'active' && !selected.session.exited ? selected.session.devinSessionId : null;
+        const selectedSessionId = selected?.kind === 'active' && !selected.session.exited ? this.keyOf(selected.session) : null;
         const sessions = this.entries.flatMap((entry) => {
-            if (entry.kind !== 'active' || entry.session.exited || !entry.session.devinSessionId)
+            if (entry.kind !== 'active' || entry.session.exited || !entry.session.cliSessionId)
                 return [];
             return [{
-                    devinSessionId: entry.session.devinSessionId,
+                    adapterId: entry.session.adapterId,
+                    cliSessionId: entry.session.cliSessionId,
                     cwd: entry.session.cwd,
                     name: entry.session.name,
                     tag: entry.session.tag,
@@ -324,7 +373,7 @@ class SessionManager {
             version: restart_1.RESTART_STATE_VERSION,
             selectedSessionId,
             sessions,
-            // absent stays absent so version-1 handoffs round-trip byte-identically
+            // absent stays absent so older handoffs round-trip without gaining fields
             ...(this.lastPromptAt === null ? {} : { lastPromptAt: this.lastPromptAt }),
         };
     }
@@ -339,11 +388,13 @@ class SessionManager {
         if (state.lastPromptAt !== undefined)
             this.lastPromptAt = Math.max(this.lastPromptAt ?? 0, state.lastPromptAt);
         for (const record of state.sessions) {
-            if (seen.has(record.devinSessionId) || !this.tagStore.tags.includes(record.tag))
+            const key = (0, types_1.sessionKey)(record.adapterId, record.cliSessionId);
+            if (seen.has(key) || !this.tagStore.tags.includes(record.tag))
                 continue;
-            seen.add(record.devinSessionId);
+            seen.add(key);
             try {
-                restored.push(this.create(record.cwd, record.name, record.tag, record.devinSessionId, {
+                restored.push(this.create(record.cwd, record.name, record.tag, record.cliSessionId, {
+                    adapterId: record.adapterId,
                     attach: false,
                     status: record.status,
                     unread: record.unread,
@@ -356,7 +407,7 @@ class SessionManager {
         for (const session of restored)
             session.suppressNotifications = false;
         const selectedIndex = state.selectedSessionId
-            ? this.entries.findIndex((entry) => entry.kind === 'active' && entry.session.devinSessionId === state.selectedSessionId)
+            ? this.entries.findIndex((entry) => entry.kind === 'active' && this.keyOf(entry.session) === state.selectedSessionId)
             : -1;
         this.selected = selectedIndex >= 0 ? selectedIndex : 0;
         this.onUpdate();
@@ -439,17 +490,9 @@ class SessionManager {
             const sample = sessions.get(session.pid);
             session.memoryBytes = session.exited ? null : sample?.memoryBytes ?? null;
             const realId = sample?.sessionId;
-            if (session.devinSessionId || !realId)
+            if (session.cliSessionId || !realId)
                 continue;
-            session.devinSessionId = realId;
-            this.devinSessionCallbacks.get(session)?.(session.pid, realId);
-            this.resumedIds.add(realId);
-            this.tagStore.assignSessionTag(realId, session.tag);
-            const alias = this.pendingAliases.get(session);
-            if (alias) {
-                this.tagStore.setSessionAlias(realId, alias);
-                this.pendingAliases.delete(session);
-            }
+            this.resolveSessionId(session, realId);
             changedTags.add(session.tag);
         }
         for (const tag of changedTags)
@@ -460,27 +503,80 @@ class SessionManager {
             this.onUpdate();
     }
     /**
-     * Saves a tag's current runtime order only when every active session has a real Devin id;
+     * Records a session's first real CLI id: persists its tag and any alias typed before the id
+     * was known. The caller persists group order.
+     * @param session Owned session whose id was just learned.
+     * @param realId Real CLI session id from discovery or a hook payload.
+     * @returns Nothing.
+     */
+    resolveSessionId(session, realId) {
+        session.cliSessionId = realId;
+        const key = (0, types_1.sessionKey)(session.adapterId, realId);
+        this.resumedKeys.add(key);
+        this.tagStore.assignSessionTag(key, session.tag);
+        const alias = this.pendingAliases.get(session);
+        if (alias) {
+            this.tagStore.setSessionAlias(key, alias);
+            this.pendingAliases.delete(session);
+        }
+    }
+    /**
+     * Switches a running session to a new CLI id (Claude `/clear`), keeping its row, tag,
+     * position and alias, and letting the previous conversation show up as RECENT again.
+     * @param session Owned session that reported a different id.
+     * @param realId The new real CLI session id.
+     * @returns Nothing.
+     */
+    rekeySession(session, realId) {
+        const oldKey = this.keyOf(session);
+        const newKey = (0, types_1.sessionKey)(session.adapterId, realId);
+        session.cliSessionId = realId;
+        this.resumedKeys.delete(oldKey);
+        this.resumedKeys.add(newKey);
+        this.tagStore.renameSessionKey(oldKey, newKey);
+        this.tagStore.assignSessionTag(newKey, session.tag);
+        this.persistGroup(session.tag);
+    }
+    /**
+     * Applies the `session_id` from a hook payload: fills in an unknown id immediately (no
+     * waiting for the next discovery poll), and re-keys only for CLIs whose id can change.
+     * @param session Session the hook ran under.
+     * @param hookId Validated session id from the payload.
+     * @returns Nothing.
+     */
+    noteHookSessionId(session, hookId) {
+        if (session.cliSessionId === hookId)
+            return;
+        if (!session.cliSessionId) {
+            this.resolveSessionId(session, hookId);
+            this.persistGroup(session.tag);
+        }
+        else if (this.adapterFor(session.adapterId).sessionIdChanges) {
+            this.rekeySession(session, hookId);
+        }
+    }
+    /**
+     * Saves a tag's current runtime order only when every active session has a real CLI session id;
      * used by MOVE commit and deferred discovery completion.
      * @param tag Canonical runtime group to conditionally persist.
      * @returns Nothing.
      */
     persistGroup(tag) {
         const group = this.runtimeOrder.get(tag) ?? [];
-        const ids = group.map((session) => session.devinSessionId);
+        const ids = group.map((session) => this.keyOf(session));
         if (ids.some((id) => !id))
             return;
         this.tagStore.saveSessionOrder(tag, ids);
     }
     /**
-     * Adopts an external devin REPL exclusively, waiting for graceful exit before resuming it
+     * Adopts an external agent REPL exclusively, waiting for graceful exit before resuming it
      * as an owned PTY under the selected required tag.
      * @param ext External row confirmed by the user; must still be in the current poll's list.
      * @param tag Required canonical ACTIVE group chosen before destructive confirmation.
      * @returns Promise resolving to an error message, or null on success.
      */
     async adopt(ext, tag) {
-        if (!this.discovery.externals.some((e) => e.pid === ext.pid && e.sessionId === ext.sessionId))
+        if (!this.discovery.externals.some((e) => e.pid === ext.pid && e.adapterId === ext.adapterId && e.sessionId === ext.sessionId))
             return 'Session is no longer running externally';
         try {
             process.kill(ext.pid, 'SIGTERM');
@@ -503,7 +599,7 @@ class SessionManager {
             return `"${this.displayName({ kind: 'external', external: ext })}" did not exit within 5s; try adopting again`;
         this.discovery.removeExternal(ext.pid);
         await new Promise((r) => setTimeout(r, 300));
-        this.create(ext.cwd, ext.title || ext.sessionId, tag, ext.sessionId);
+        this.create(ext.cwd, ext.title || ext.sessionId, tag, ext.sessionId, { adapterId: ext.adapterId });
         return null;
     }
     toggleMarkedDone(session) {
@@ -574,6 +670,9 @@ class SessionManager {
         const s = this.sessions.find((x) => x.id === id);
         if (!s)
             return;
+        const hookId = (0, payload_1.hookSessionId)(payload);
+        if (hookId)
+            this.noteHookSessionId(s, hookId);
         if (event === 'UserPromptSubmit') {
             const now = Date.now();
             this.lastPromptAt = this.lastPromptAt === null ? now : Math.max(this.lastPromptAt, now);

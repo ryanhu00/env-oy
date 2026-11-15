@@ -1,15 +1,15 @@
 {
-  "name": "devin-conductor",
+  "name": "envoy",
   "version": "0.1.0",
   "private": true,
-  "description": "Conductor-style multi-session manager TUI for the Devin CLI",
+  "description": "Conductor-style multi-session manager TUI for agent CLIs",
   "main": "dist/index.js",
   "scripts": {
-    "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true",
+    "postinstall": "chmod +x bin/envoy bin/envoy-hook.sh node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true",
     "dev": "tsx src/index.ts",
     "build": "tsc",
     "test": "tsx --test test/*.test.ts",
-    "start": "bin/dgui"
+    "start": "bin/envoy"
   },
   "engines": {
     "node": ">=20"

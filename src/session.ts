@@ -1,6 +1,9 @@
 import * as pty from 'node-pty';
 import { Terminal } from '@xterm/headless';
 import type { IMarker } from '@xterm/headless';
+import { envoyEnv, sessionChildEnv } from './paths';
+import { DEFAULT_ADAPTER_ID } from './adapters/types';
+import type { AdapterId } from './adapters/types';
 
 export type SessionStatus = 'working' | 'waiting' | 'needs-permission' | 'exited';
 
@@ -21,6 +24,7 @@ export interface Notification {
 }
 
 export interface SessionOptions {
+  adapterId?: AdapterId;
   extraArgs?: string[];
   command?: readonly string[];
   status?: Exclude<SessionStatus, 'exited'>;
@@ -35,7 +39,9 @@ export class Session {
   readonly cwd: string;
   readonly tag: string;
   readonly term: Terminal;
-  devinSessionId: string | null;
+  readonly adapterId: AdapterId;
+  /** Real session id reported by the CLI; null until discovery learns it. */
+  cliSessionId: string | null;
   memoryBytes: number | null = null;
   status: SessionStatus = 'waiting';
   unread: Notification[] = [];
@@ -49,40 +55,41 @@ export class Session {
   private readonly turns: PromptTurn[] = [];
 
   /**
-   * Spawns the session command (DEVIN_CONDUCTOR_CMD, default `devin`) in a fresh PTY and
+   * Spawns the session command (ENVOY_CMD, default `devin`) in a fresh PTY and
    * mirrors its output into a headless terminal used for rendering.
-   * @param id Unique conductor id exported to the child as DEVIN_CONDUCTOR_ID.
+   * @param id Unique conductor id exported to the child as ENVOY_ID.
    * @param name Display name shown in the sidebar.
    * @param cwd Directory the PTY is spawned in.
    * @param tag Ordered ACTIVE group assigned before the PTY starts.
-   * @param devinSessionId Real Devin session id when resuming/adopting, otherwise null until discovery.
+   * @param cliSessionId Real CLI session id when resuming/adopting, otherwise null until discovery.
    * @param cols Initial width of the PTY and mirror terminal.
    * @param rows Initial height of the PTY and mirror terminal.
-   * @param eventsDir Directory exported as DEVIN_CONDUCTOR_EVENTS_DIR for hook scripts.
+   * @param eventsDir Directory exported as ENVOY_EVENTS_DIR for hook scripts.
    * @param onOutput Invoked after PTY output is parsed into the mirror terminal; the caller
    *   may skip redraws when this session is not visible.
    * @param onUpdate Invoked when the process exits, to always schedule a redraw (sidebar changes).
    * @param onNotify Invoked only when notify() actually pushes an unread entry (user detached).
    * @param options Optional argv and restored status/unread state applied without notification side effects.
    */
-  constructor(id: string, name: string, cwd: string, tag: string, devinSessionId: string | null, cols: number, rows: number, eventsDir: string, onOutput: () => void, onUpdate: () => void, private readonly onNotify: (type: NotificationType) => void, options: SessionOptions = {}) {
+  constructor(id: string, name: string, cwd: string, tag: string, cliSessionId: string | null, cols: number, rows: number, eventsDir: string, onOutput: () => void, onUpdate: () => void, private readonly onNotify: (type: NotificationType) => void, options: SessionOptions = {}) {
     this.id = id;
     this.name = name;
     this.cwd = cwd;
     this.tag = tag;
-    this.devinSessionId = devinSessionId;
+    this.adapterId = options.adapterId ?? DEFAULT_ADAPTER_ID;
+    this.cliSessionId = cliSessionId;
     this.status = options.status ?? 'waiting';
     this.unread = options.unread?.map((entry) => ({ ...entry })) ?? [];
     this.markedDone = options.markedDone ?? false;
     this.term = new Terminal({ cols, rows, scrollback: 5000, allowProposedApi: true });
     const command = options.command;
     if (command && command.length === 0) throw new Error('Session command must include an executable');
-    this.proc = pty.spawn(command?.[0] ?? (process.env.DEVIN_CONDUCTOR_CMD || 'devin'), command ? [...command.slice(1)] : options.extraArgs ?? [], {
+    this.proc = pty.spawn(command?.[0] ?? (envoyEnv('CMD') || 'devin'), command ? [...command.slice(1)] : options.extraArgs ?? [], {
       name: 'xterm-256color',
       cols,
       rows,
       cwd,
-      env: { ...process.env, DEVIN_CONDUCTOR_ID: id, DEVIN_CONDUCTOR_EVENTS_DIR: eventsDir } as { [key: string]: string },
+      env: sessionChildEnv(id, eventsDir),
     });
     this.proc.onData((d) => this.term.write(d, onOutput));
     this.proc.onExit(() => {

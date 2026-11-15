@@ -130,7 +130,7 @@ async function createSession(app: RunningApp, launchLog: string, expectedLaunche
 async function quitApp(app: RunningApp): Promise<void> {
   const marker = app.output.length;
   app.proc.write('q');
-  await waitFor(() => app.output.slice(marker).includes('Quit devin-conductor and kill all sessions?'), 'quit confirmation');
+  await waitFor(() => app.output.slice(marker).includes('Quit Envoy and kill all sessions?'), 'quit confirmation');
   app.proc.write('y');
   await waitFor(() => app.output.slice(marker).includes(SHELL_PROMPT), 'parent shell prompt');
 }
@@ -141,15 +141,15 @@ async function quitApp(app: RunningApp): Promise<void> {
  */
 async function testLauncherRefreshLifecycle(): Promise<void> {
   const projectRoot = path.resolve(__dirname, '..');
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-conductor-e2e-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'envoy-e2e-'));
   const fakeBin = path.join(root, 'bin');
   const fakeDevin = path.join(fakeBin, 'devin');
   const fakeNode = path.join(fakeBin, 'node');
   const launchLog = path.join(root, 'launches.jsonl');
   const nodeLog = path.join(root, 'app-pids');
   const eventsDir = path.join(root, 'events');
-  const configDir = path.join(root, '.config', 'devin-conductor');
-  const channelDir = path.join(root, '.local', 'share', 'devin-conductor');
+  const configDir = path.join(root, '.config', 'envoy');
+  const channelDir = path.join(root, '.local', 'share', 'envoy');
   let launcherApp: RunningApp | null = null;
   let directApp: RunningApp | null = null;
   let fatalApp: RunningApp | null = null;
@@ -174,9 +174,9 @@ if (process.argv[2] === 'list') {
   process.exit(0);
 }
 const resume = process.argv[2] === '-r';
-const id = resume ? process.argv[3] : 'fresh-' + process.env.DEVIN_CONDUCTOR_ID;
+const id = resume ? process.argv[3] : 'fresh-' + process.env.ENVOY_ID;
 process.title = 'devin';
-fs.appendFileSync(process.env.FAKE_DEVIN_LAUNCH_LOG, JSON.stringify({ id, conductorId: process.env.DEVIN_CONDUCTOR_ID, pid: process.pid }) + '\\n');
+fs.appendFileSync(process.env.FAKE_DEVIN_LAUNCH_LOG, JSON.stringify({ id, conductorId: process.env.ENVOY_ID, pid: process.pid }) + '\\n');
 const locks = path.join(os.homedir(), '.local', 'share', 'devin', 'session_locks');
 fs.mkdirSync(locks, { recursive: true });
 const lock = fs.openSync(path.join(locks, id + '.lock'), 'a');
@@ -188,15 +188,15 @@ process.stdin.resume();
       ...process.env,
       HOME: root,
       PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
-      DEVIN_CONDUCTOR_CMD: fakeDevin,
-      DEVIN_CONDUCTOR_EVENTS_DIR: eventsDir,
-      DEVIN_CONDUCTOR_NO_HOOK_PROMPT: '1',
+      ENVOY_CMD: fakeDevin,
+      ENVOY_EVENTS_DIR: eventsDir,
+      ENVOY_NO_HOOK_PROMPT: '1',
       FAKE_DEVIN_LAUNCH_LOG: launchLog,
       FAKE_NODE_LOG: nodeLog,
     } as Record<string, string>;
-    delete baseEnv.DEVIN_CONDUCTOR_RESTART_CHANNEL;
+    delete baseEnv.ENVOY_RESTART_CHANNEL;
 
-    const launcher = path.join(projectRoot, 'bin', 'dgui').replace(/'/g, `'"'"'`);
+    const launcher = path.join(projectRoot, 'bin', 'envoy').replace(/'/g, `'"'"'`);
     launcherApp = startApp(`'${launcher}'`, root, baseEnv);
     await waitFor(() => launcherApp!.output.includes(' SIDEBAR') && readAppPids(nodeLog).length === 1, 'launcher app startup');
     assert.equal(fs.statSync(channelDir).mode & 0o777, 0o700);
@@ -226,7 +226,7 @@ process.stdin.resume();
       refreshMarker = launcherApp.output.length;
       launcherApp.proc.write('R');
       await new Promise<void>((resolve) => setTimeout(resolve, 750));
-      confirmed = launcherApp.output.slice(refreshMarker).includes('Refresh dgui and reconnect 2 idle sessions?');
+      confirmed = launcherApp.output.slice(refreshMarker).includes('Refresh Envoy and reconnect 2 idle sessions?');
     }
     assert.equal(confirmed, true);
     const firstNodePid = readAppPids(nodeLog)[0];
@@ -258,7 +258,7 @@ process.stdin.resume();
     const directSessionPid = readLaunches(launchLog)[4].pid;
     const directMarker = directApp.output.length;
     directApp.proc.write('R');
-    await waitFor(() => directApp!.output.slice(directMarker).includes('Cannot refresh: restart dgui once to enable the launcher'), 'direct Node launcher notice');
+    await waitFor(() => directApp!.output.slice(directMarker).includes('Cannot refresh: restart envoy once to enable the launcher'), 'direct Node launcher notice');
     assert.equal(isAlive(directNodePid), true);
     assert.equal(isAlive(directSessionPid), true);
     assert.equal(directApp.exited, false);
@@ -273,7 +273,7 @@ process.stdin.resume();
     fatalApp = startApp(`node --require '${prelude}' '${dist}'`, root, baseEnv);
     await waitFor(() => fatalApp!.output.includes(' SIDEBAR'), 'fatal app startup');
     const fatalMarker = fatalApp.output.length;
-    await waitFor(() => fatalApp!.output.slice(fatalMarker).includes('devin-conductor crashed: Error: synthetic fatal') && fatalApp!.output.slice(fatalMarker).includes(SHELL_PROMPT), 'fatal cleanup');
+    await waitFor(() => fatalApp!.output.slice(fatalMarker).includes('Envoy crashed: Error: synthetic fatal') && fatalApp!.output.slice(fatalMarker).includes(SHELL_PROMPT), 'fatal cleanup');
     const finalRestore = '\x1b[?2004l\x1b[0m\x1b[?25h\x1b[?1049l';
     assert.equal(fatalApp.output.slice(fatalMarker).split(finalRestore).length - 1, 1);
     fatalApp.proc.kill();
@@ -284,14 +284,14 @@ process.stdin.resume();
     fs.mkdirSync(missingHome);
     fs.mkdirSync(missingBin);
     fs.writeFileSync(path.join(missingBin, 'node'), '#!/bin/sh\nexit 75\n', { mode: 0o700 });
-    const missing = spawnSync(path.join(projectRoot, 'bin', 'dgui'), [], {
+    const missing = spawnSync(path.join(projectRoot, 'bin', 'envoy'), [], {
       env: { ...process.env, HOME: missingHome, PATH: `${missingBin}:/usr/bin:/bin` },
       encoding: 'utf8',
       timeout: 5000,
     });
     assert.equal(missing.status, 1);
-    assert.match(missing.stderr, /dgui refresh failed: restart channel missing/);
-    const missingChannels = path.join(missingHome, '.local', 'share', 'devin-conductor');
+    assert.match(missing.stderr, /Envoy refresh failed: restart channel missing/);
+    const missingChannels = path.join(missingHome, '.local', 'share', 'envoy');
     assert.deepEqual(fs.readdirSync(missingChannels).filter((name) => name.startsWith('restart-channel-')), []);
   } finally {
     if (launcherApp && !launcherApp.exited) launcherApp.proc.kill();

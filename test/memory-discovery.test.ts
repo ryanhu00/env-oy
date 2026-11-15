@@ -4,7 +4,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { test } from 'node:test';
-import { Discovery, OwnedSessionSample, parsePsDevinPids, parsePsDevinProcesses } from '../src/discovery';
+import { createDevinAdapter, parsePsDevinPids, parsePsDevinProcesses } from '../src/adapters/devin';
+import { Discovery, OwnedSessionSample } from '../src/discovery';
 
 /**
  * Verifies RSS validation, command filtering, compatibility parsing, and PID deduplication.
@@ -39,7 +40,7 @@ function testProcessParser(): void {
  * @returns Promise resolved after scripts, environment, and temporary files are restored.
  */
 async function testDiscoveryMemoryMapping(): Promise<void> {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-conductor-memory-discovery-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'envoy-memory-discovery-'));
   const bin = path.join(root, 'bin');
   const failMarker = path.join(root, 'fail-ps');
   const previousPath = process.env.PATH;
@@ -81,12 +82,14 @@ printf '[{"id":"external-id","working_directory":"${root}","title":"External tit
       (sample) => updates.push(new Map([...sample].map(([pid, value]) => [pid, { ...value }]))),
       () => {
         redraws++;
-      }
+      },
+      [createDevinAdapter()]
     );
     await (discovery as unknown as { poll: () => Promise<void> }).poll();
     assert.equal(discovery.totalMemoryBytes, 600 * 1024);
     assert.deepEqual(updates, [new Map([[101, { memoryBytes: 100 * 1024 }]])]);
     assert.deepEqual(discovery.externals, [{
+      adapterId: 'devin',
       pid: 202,
       sessionId: 'external-id',
       cwd: root,
@@ -116,7 +119,7 @@ printf '[{"id":"external-id","working_directory":"${root}","title":"External tit
  * @returns Promise resolved after isolated commands, database, and environment are removed.
  */
 async function testRecentSqliteFallback(): Promise<void> {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-conductor-recent-fallback-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'envoy-recent-fallback-'));
   const bin = path.join(root, 'bin');
   const dirA = path.join(root, 'a');
   const dirB = path.join(root, 'b');
@@ -183,7 +186,7 @@ exec /usr/bin/sqlite3 "$@"
       [dirA, dirB],
       () => {},
       () => {},
-      dbPath
+      [createDevinAdapter({ sessionsDbPath: dbPath })]
     );
 
     await (discovery as unknown as { poll: () => Promise<void> }).poll();

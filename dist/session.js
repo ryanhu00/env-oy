@@ -36,6 +36,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.Session = void 0;
 const pty = __importStar(require("node-pty"));
 const headless_1 = require("@xterm/headless");
+const paths_1 = require("./paths");
+const types_1 = require("./adapters/types");
 const PROMPT_TURN_LIMIT = 200;
 const PROMPT_TEXT_LIMIT = 500;
 class Session {
@@ -45,7 +47,9 @@ class Session {
     cwd;
     tag;
     term;
-    devinSessionId;
+    adapterId;
+    /** Real session id reported by the CLI; null until discovery learns it. */
+    cliSessionId;
     memoryBytes = null;
     status = 'waiting';
     unread = [];
@@ -58,29 +62,30 @@ class Session {
     lastPromptMarker = null;
     turns = [];
     /**
-     * Spawns the session command (DEVIN_CONDUCTOR_CMD, default `devin`) in a fresh PTY and
+     * Spawns the session command (ENVOY_CMD, default `devin`) in a fresh PTY and
      * mirrors its output into a headless terminal used for rendering.
-     * @param id Unique conductor id exported to the child as DEVIN_CONDUCTOR_ID.
+     * @param id Unique conductor id exported to the child as ENVOY_ID.
      * @param name Display name shown in the sidebar.
      * @param cwd Directory the PTY is spawned in.
      * @param tag Ordered ACTIVE group assigned before the PTY starts.
-     * @param devinSessionId Real Devin session id when resuming/adopting, otherwise null until discovery.
+     * @param cliSessionId Real CLI session id when resuming/adopting, otherwise null until discovery.
      * @param cols Initial width of the PTY and mirror terminal.
      * @param rows Initial height of the PTY and mirror terminal.
-     * @param eventsDir Directory exported as DEVIN_CONDUCTOR_EVENTS_DIR for hook scripts.
+     * @param eventsDir Directory exported as ENVOY_EVENTS_DIR for hook scripts.
      * @param onOutput Invoked after PTY output is parsed into the mirror terminal; the caller
      *   may skip redraws when this session is not visible.
      * @param onUpdate Invoked when the process exits, to always schedule a redraw (sidebar changes).
      * @param onNotify Invoked only when notify() actually pushes an unread entry (user detached).
      * @param options Optional argv and restored status/unread state applied without notification side effects.
      */
-    constructor(id, name, cwd, tag, devinSessionId, cols, rows, eventsDir, onOutput, onUpdate, onNotify, options = {}) {
+    constructor(id, name, cwd, tag, cliSessionId, cols, rows, eventsDir, onOutput, onUpdate, onNotify, options = {}) {
         this.onNotify = onNotify;
         this.id = id;
         this.name = name;
         this.cwd = cwd;
         this.tag = tag;
-        this.devinSessionId = devinSessionId;
+        this.adapterId = options.adapterId ?? types_1.DEFAULT_ADAPTER_ID;
+        this.cliSessionId = cliSessionId;
         this.status = options.status ?? 'waiting';
         this.unread = options.unread?.map((entry) => ({ ...entry })) ?? [];
         this.markedDone = options.markedDone ?? false;
@@ -88,12 +93,12 @@ class Session {
         const command = options.command;
         if (command && command.length === 0)
             throw new Error('Session command must include an executable');
-        this.proc = pty.spawn(command?.[0] ?? (process.env.DEVIN_CONDUCTOR_CMD || 'devin'), command ? [...command.slice(1)] : options.extraArgs ?? [], {
+        this.proc = pty.spawn(command?.[0] ?? ((0, paths_1.envoyEnv)('CMD') || 'devin'), command ? [...command.slice(1)] : options.extraArgs ?? [], {
             name: 'xterm-256color',
             cols,
             rows,
             cwd,
-            env: { ...process.env, DEVIN_CONDUCTOR_ID: id, DEVIN_CONDUCTOR_EVENTS_DIR: eventsDir },
+            env: (0, paths_1.sessionChildEnv)(id, eventsDir),
         });
         this.proc.onData((d) => this.term.write(d, onOutput));
         this.proc.onExit(() => {

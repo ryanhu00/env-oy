@@ -43,14 +43,14 @@ function readScreen(terminal: Terminal): string[] {
  * @returns Promise resolved after fake sessions and isolated files are removed.
  */
 async function testRecentVisibilityManagerAndInput(): Promise<void> {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-conductor-recent-manager-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'envoy-recent-manager-'));
   const command = path.join(root, 'fake-devin');
-  const previousCommand = process.env.DEVIN_CONDUCTOR_CMD;
+  const previousCommand = process.env.ENVOY_CMD;
   let manager: SessionManager | null = null;
   let replacement: SessionManager | null = null;
   try {
     fs.writeFileSync(command, "#!/bin/sh\ntrap 'exit 0' HUP TERM INT\nwhile :; do sleep 1; done\n", { mode: 0o700 });
-    process.env.DEVIN_CONDUCTOR_CMD = command;
+    process.env.ENVOY_CMD = command;
     const configPath = path.join(root, 'config.json');
     fs.writeFileSync(configPath, JSON.stringify({ tags: ['code'] }));
     manager = new SessionManager(root, [root], new TagStore(configPath), () => {}, new DesktopNotifier(false));
@@ -58,8 +58,8 @@ async function testRecentVisibilityManagerAndInput(): Promise<void> {
     manager.detach();
     const activeB = manager.create(root, 'active-b', 'code');
     manager.detach();
-    manager.discovery.recents = [{ sessionId: 'recent-old', cwd: root, title: 'recent old', lastAgo: '1m', lastActivityAt: 10 }];
-    manager.discovery.externals = [{ pid: 424242, sessionId: 'external-one', cwd: root, title: 'terminal one', lastAgo: 'now', memoryBytes: 128 * 1024 ** 2 }];
+    manager.discovery.recents = [{ adapterId: 'devin', sessionId: 'recent-old', cwd: root, title: 'recent old', lastAgo: '1m', lastActivityAt: 10 }];
+    manager.discovery.externals = [{ adapterId: 'devin', pid: 424242, sessionId: 'external-one', cwd: root, title: 'terminal one', lastAgo: 'now', memoryBytes: 128 * 1024 ** 2 }];
     assert.equal(manager.recentVisible, true);
     assert.deepEqual(manager.entries.map((entry) => entry.kind), ['active', 'active', 'recent', 'external']);
     (manager.discovery as unknown as { onUpdate: () => void }).onUpdate();
@@ -72,7 +72,7 @@ async function testRecentVisibilityManagerAndInput(): Promise<void> {
     assert.deepEqual(manager.entries.map((entry) => entry.kind), ['active', 'active', 'external']);
     assert.equal(manager.entries[manager.selected].kind, 'external');
     assert.equal(manager.discovery.recents[0].sessionId, 'recent-old');
-    manager.discovery.recents = [{ sessionId: 'recent-fresh', cwd: root, title: 'recent fresh', lastAgo: 'now', lastActivityAt: 20 }];
+    manager.discovery.recents = [{ adapterId: 'devin', sessionId: 'recent-fresh', cwd: root, title: 'recent fresh', lastAgo: 'now', lastActivityAt: 20 }];
     (manager.discovery as unknown as { onUpdate: () => void }).onUpdate();
     assert.deepEqual(manager.entries.map((entry) => entry.kind), ['active', 'active', 'external']);
     assert.equal(manager.entries[manager.selected].kind, 'external');
@@ -96,7 +96,7 @@ async function testRecentVisibilityManagerAndInput(): Promise<void> {
     manager.selected = manager.entries.findIndex((entry) => entry.kind === 'recent');
     input.handle('H');
     assert.equal(manager.selectedSession, activeB);
-    manager.discovery.recents = [{ sessionId: 'recent-hidden-poll', cwd: root, title: 'hidden poll', lastAgo: 'now', lastActivityAt: 30 }];
+    manager.discovery.recents = [{ adapterId: 'devin', sessionId: 'recent-hidden-poll', cwd: root, title: 'hidden poll', lastAgo: 'now', lastActivityAt: 30 }];
     (manager.discovery as unknown as { onUpdate: () => void }).onUpdate();
     assert.equal(manager.selectedSession, activeB);
     assert.deepEqual(manager.entries.map((entry) => entry.kind), ['active', 'active']);
@@ -124,8 +124,8 @@ async function testRecentVisibilityManagerAndInput(): Promise<void> {
     input.handle('h');
     assert.equal(manager.recentVisible, false);
 
-    activeA.devinSessionId = 'active-a-id';
-    activeB.devinSessionId = 'active-b-id';
+    activeA.cliSessionId = 'active-a-id';
+    activeB.cliSessionId = 'active-b-id';
     const refreshInput = new InputHandler(manager, () => {}, () => {}, true, () => {
       const restartState = manager!.getRestartState();
       assert.equal('recentVisible' in restartState, false);
@@ -142,8 +142,8 @@ async function testRecentVisibilityManagerAndInput(): Promise<void> {
     for (const session of manager?.sessions ?? []) session.term.dispose();
     for (const session of replacement?.sessions ?? []) session.term.dispose();
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
-    if (previousCommand === undefined) delete process.env.DEVIN_CONDUCTOR_CMD;
-    else process.env.DEVIN_CONDUCTOR_CMD = previousCommand;
+    if (previousCommand === undefined) delete process.env.ENVOY_CMD;
+    else process.env.ENVOY_CMD = previousCommand;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
@@ -153,13 +153,13 @@ async function testRecentVisibilityManagerAndInput(): Promise<void> {
  * @returns Nothing after isolated manager configuration is removed.
  */
 function testInitialRecentSelection(): void {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-conductor-recent-selection-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'envoy-recent-selection-'));
   try {
     const configPath = path.join(root, 'config.json');
     fs.writeFileSync(configPath, JSON.stringify({ tags: ['code'] }));
-    const terminal = { pid: 1, sessionId: 'terminal-id', cwd: root, title: 'terminal', lastAgo: 'just now', memoryBytes: 1 };
-    const recent = { sessionId: 'recent-id', cwd: root, title: 'recent', lastAgo: 'just now', lastActivityAt: 2 };
-    const later = { sessionId: 'later-id', cwd: root, title: 'later', lastAgo: 'just now', lastActivityAt: 3 };
+    const terminal = { adapterId: 'devin', pid: 1, sessionId: 'terminal-id', cwd: root, title: 'terminal', lastAgo: 'just now', memoryBytes: 1 };
+    const recent = { adapterId: 'devin', sessionId: 'recent-id', cwd: root, title: 'recent', lastAgo: 'just now', lastActivityAt: 2 };
+    const later = { adapterId: 'devin', sessionId: 'later-id', cwd: root, title: 'later', lastAgo: 'just now', lastActivityAt: 3 };
     const manager = new SessionManager(root, [root], new TagStore(configPath), () => {}, new DesktopNotifier(false));
     const discoveryUpdate = (manager.discovery as unknown as { onUpdate: () => void }).onUpdate;
     manager.discovery.externals = [terminal];
@@ -199,10 +199,10 @@ function testInitialRecentSelection(): void {
  */
 async function testRecentVisibilityPtySmoke(): Promise<void> {
   const projectRoot = path.resolve(__dirname, '..');
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-conductor-recent-pty-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'envoy-recent-pty-'));
   const fakeBin = path.join(root, 'bin');
   const eventsDir = path.join(root, 'events');
-  const configDir = path.join(root, '.config', 'devin-conductor');
+  const configDir = path.join(root, '.config', 'envoy');
   const launchLog = path.join(root, 'unexpected-launches');
   const terminal = new Terminal({ allowProposedApi: true, cols: 120, rows: 30 });
   let app: pty.IPty | null = null;
@@ -248,8 +248,8 @@ process.stdin.resume();
         ...process.env,
         HOME: root,
         PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
-        DEVIN_CONDUCTOR_EVENTS_DIR: eventsDir,
-        DEVIN_CONDUCTOR_NO_HOOK_PROMPT: '1',
+        ENVOY_EVENTS_DIR: eventsDir,
+        ENVOY_NO_HOOK_PROMPT: '1',
         FAKE_LAUNCH_LOG: launchLog,
       } as Record<string, string>,
     });
@@ -282,7 +282,7 @@ process.stdin.resume();
     assert.equal(fs.existsSync(launchLog), false);
 
     app.write('q');
-    await waitFor(() => readScreen(terminal)[29].includes('Quit devin-conductor and kill all sessions?'), 'quit confirmation');
+    await waitFor(() => readScreen(terminal)[29].includes('Quit Envoy and kill all sessions?'), 'quit confirmation');
     app.write('y');
     await waitFor(() => exited, 'clean application quit');
   } finally {

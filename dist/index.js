@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const fs = __importStar(require("fs"));
 const os = __importStar(require("os"));
 const path = __importStar(require("path"));
+const registry_1 = require("./adapters/registry");
 const sessionManager_1 = require("./sessionManager");
 const notifications_1 = require("./notifications");
 const notify_1 = require("./notify");
@@ -44,43 +45,18 @@ const renderer_1 = require("./ui/renderer");
 const installer_1 = require("./hooks/installer");
 const restart_1 = require("./restart");
 const tags_1 = require("./tags");
-const client_1 = require("./haein/client");
-const control_1 = require("./haein/control");
-const runtime_1 = require("./haein/runtime");
+const paths_1 = require("./paths");
 /**
- * Runs dgui, including launcher-channel restore and idempotent terminal lifecycle handling.
+ * Runs Envoy, including launcher-channel restore and idempotent terminal lifecycle handling.
  * @returns Nothing; the process exits through normal quit, fatal cleanup, or launcher refresh.
  */
 async function main() {
-    const args = process.argv.slice(2);
-    const socketFlag = args.indexOf('--haein-socket');
-    const haeinSocket = socketFlag >= 0 ? args[socketFlag + 1] : undefined;
-    const focusFlag = args.indexOf('--focus-task');
-    const focusTaskId = focusFlag >= 0 ? args[focusFlag + 1] : undefined;
-    const focusOnly = args.includes('--focus-only');
-    if ((socketFlag >= 0 && !haeinSocket) || (focusFlag >= 0 && !focusTaskId) || (focusOnly && (!haeinSocket || !focusTaskId))) {
-        process.stderr.write('Usage: dgui [--haein-socket <path> --focus-task <id> [--focus-only]]\n');
-        process.exitCode = 1;
-        return;
-    }
-    if (focusOnly && haeinSocket && focusTaskId) {
-        try {
-            const response = await (0, control_1.sendFocusRequest)((0, control_1.controlSocketPath)(haeinSocket), focusTaskId);
-            if (!response.ok)
-                throw new Error(response.error || 'focus request rejected');
-        }
-        catch (error) {
-            process.stderr.write(`dgui: ${error instanceof Error ? error.message : 'could not focus Haein task'}\n`);
-            process.exitCode = 1;
-        }
-        return;
-    }
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
-        process.stderr.write('devin-conductor must be run in an interactive terminal\n');
+        process.stderr.write(`${paths_1.APP_DISPLAY_NAME} must be run in an interactive terminal\n`);
         process.exit(1);
     }
-    const eventsDir = process.env.DEVIN_CONDUCTOR_EVENTS_DIR || path.join(os.homedir(), '.local', 'share', 'devin-conductor');
-    const restartChannelPath = (0, restart_1.validateRestartChannelPath)(process.env.DEVIN_CONDUCTOR_RESTART_CHANNEL);
+    const eventsDir = (0, paths_1.resolveEventsDir)();
+    const restartChannelPath = (0, restart_1.validateRestartChannelPath)((0, paths_1.envoyEnv)('RESTART_CHANNEL'));
     const hasRestartState = restartChannelPath !== null && fs.existsSync(restartChannelPath);
     const tagStore = new tags_1.TagStore();
     const restartState = hasRestartState ? (0, restart_1.consumeRestartState)(restartChannelPath, tagStore.tags) : null;
@@ -95,6 +71,8 @@ async function main() {
             defaultCwd = dir;
     }
     catch { }
+    // only the CLIs the user has (or explicitly enabled in the config) are driven
+    const selection = (0, registry_1.selectAdapters)(tagStore.adapterSettings);
     let renderer;
     let input;
     let renderEnabled = false;
@@ -104,13 +82,7 @@ async function main() {
     const manager = new sessionManager_1.SessionManager(eventsDir, [...new Set([defaultCwd, process.cwd()])], tagStore, () => {
         if (renderEnabled)
             renderer.schedule();
-    }, new notify_1.DesktopNotifier(desktopNotifications));
-    const haeinClient = haeinSocket ? new client_1.HaeinClient(haeinSocket) : null;
-    let haeinRuntime = null;
-    let haeinControl = null;
-    if (haeinClient)
-        haeinRuntime = new runtime_1.HaeinRuntime(haeinClient, manager, tagStore, () => { if (renderEnabled)
-            renderer.schedule(); }, focusTaskId);
+    }, new notify_1.DesktopNotifier(desktopNotifications), selection.adapters, selection.defaultAdapterId, tagStore.recentLimit);
     const tailer = new notifications_1.EventsTailer(eventsDir, (id, event, payload) => manager.applyEvent(id, event, payload));
     /**
      * Restores raw mode, bracketed paste, cursor, styling, and alternate screen at most once.
@@ -137,9 +109,6 @@ async function main() {
         renderer.stop();
         manager.discovery.stop();
         tailer.stop();
-        haeinRuntime?.stop();
-        if (haeinControl)
-            void haeinControl.stop();
         process.stdin.off('data', onData);
         process.stdin.pause();
         process.stdout.off('resize', onResize);
@@ -155,7 +124,7 @@ async function main() {
         manager.killAll();
         restoreTerminal();
         if (error)
-            process.stderr.write(`devin-conductor crashed: ${error instanceof Error ? error.stack || error.message : error}\n`);
+            process.stderr.write(`${paths_1.APP_DISPLAY_NAME} crashed: ${error instanceof Error ? error.stack || error.message : error}\n`);
         process.exit(code);
     };
     /**
@@ -167,7 +136,7 @@ async function main() {
         if (!readiness.ready)
             throw new Error(readiness.message);
         if (!restartChannelPath)
-            throw new Error('Cannot refresh: restart dgui once to enable the launcher');
+            throw new Error(`Cannot refresh: restart ${paths_1.APP_NAME} once to enable the launcher`);
         try {
             (0, restart_1.writeRestartState)(manager.getRestartState(), restartChannelPath);
         }
@@ -196,32 +165,10 @@ async function main() {
         restoreTerminal();
         process.exit(75);
     };
-    input = new input_1.InputHandler(manager, () => renderer.schedule(), () => shutdown(0), restartChannelPath !== null, refresh, defaultCwd, haeinRuntime ?? undefined);
-    renderer = new renderer_1.Renderer(manager, input, os.homedir(), haeinRuntime ?? undefined);
-    haeinRuntime?.setActivationHandler(() => {
-        input.mode = 'attached';
-        input.attachedMode = 'normal';
-        renderer.schedule();
-    });
-    if (restartState && !haeinRuntime)
+    input = new input_1.InputHandler(manager, () => renderer.schedule(), () => shutdown(0), restartChannelPath !== null, refresh, defaultCwd);
+    renderer = new renderer_1.Renderer(manager, input, os.homedir());
+    if (restartState)
         manager.restoreRestartState(restartState);
-    if (haeinClient && haeinRuntime && haeinSocket) {
-        try {
-            await haeinClient.health();
-        }
-        catch (error) {
-            haeinRuntime.notice = error instanceof Error ? `Haein unavailable: ${error.message}` : 'Haein unavailable';
-        }
-        haeinControl = new control_1.HaeinControlServer((0, control_1.controlSocketPath)(haeinSocket), (taskId) => {
-            haeinRuntime.focusTask(taskId);
-        });
-        try {
-            await haeinControl.start();
-        }
-        catch (error) {
-            haeinRuntime.notice = error instanceof Error ? error.message : 'Could not start Haein focus socket';
-        }
-    }
     /**
      * Routes host-terminal data into the input state machine.
      * @param data Raw stdin bytes from the interactive TTY.
@@ -250,19 +197,26 @@ async function main() {
     manager.setPaneSize((process.stdout.columns || 80) - renderer_1.SIDEBAR_W - 1, (process.stdout.rows || 24) - 1);
     tailer.start();
     manager.discovery.start();
-    if (haeinRuntime)
-        haeinRuntime.start();
-    if (!haeinRuntime && !hasRestartState && !(0, installer_1.hooksInstalled)() && process.env.DEVIN_CONDUCTOR_NO_HOOK_PROMPT !== '1') {
+    const missingHooks = !hasRestartState && (0, paths_1.envoyEnv)('NO_HOOK_PROMPT') !== '1'
+        ? (0, installer_1.missingHookTargets)((0, installer_1.installedHookTargets)(manager.adapters.map((adapter) => adapter.id)))
+        : [];
+    if (missingHooks.length > 0) {
         input.mode = 'confirm';
         input.confirm = {
-            question: `Install Devin notification hooks into ${installer_1.CONFIG_PATH}? (backup written first)`,
-            onYes: () => (0, installer_1.installHooks)(),
+            question: (0, installer_1.describeHookInstall)(missingHooks),
+            onYes: () => {
+                const result = (0, installer_1.installHookTargets)(missingHooks);
+                if (result.errors.length > 0)
+                    throw new Error(`Hook install failed: ${result.errors.join('; ')}`);
+                if (result.notices.length > 0)
+                    input.notice = result.notices.join(' ');
+            },
         };
     }
     renderEnabled = true;
     renderer.schedule();
 }
 void main().catch((error) => {
-    process.stderr.write(`devin-conductor failed to start: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`${paths_1.APP_DISPLAY_NAME} failed to start: ${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
 });

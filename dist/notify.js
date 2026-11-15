@@ -35,7 +35,7 @@ class DesktopNotifier {
             return;
         this.lastSentAt.set(sessionId, now);
         const body = `${name}: ${BODY[type]}`.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-        (0, child_process_1.execFile)('osascript', ['-e', `display notification "${body}" with title "devin-conductor"`], () => { });
+        (0, child_process_1.execFile)('osascript', ['-e', `display notification "${body}" with title "Envoy"`], () => { });
         process.stdout.write('\x07');
     }
 }

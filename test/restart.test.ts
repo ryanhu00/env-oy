@@ -1,3 +1,4 @@
+import { sessionKey } from '../src/adapters/types';
 import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -14,15 +15,16 @@ import { TagStore } from '../src/tags';
  * @returns Promise resolved after isolated temporary artifacts are removed.
  */
 async function testRestartStateFiles(): Promise<void> {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-conductor-state-'));
-  const dataDir = path.join(root, '.local', 'share', 'devin-conductor');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'envoy-state-'));
+  const dataDir = path.join(root, '.local', 'share', 'envoy');
   try {
     const state: RestartState = {
       version: RESTART_STATE_VERSION,
       selectedSessionId: 'session-b',
       sessions: [
         {
-          devinSessionId: 'session-a',
+          adapterId: 'devin',
+          cliSessionId: 'session-a',
           cwd: root,
           name: 'original A',
           tag: 'code',
@@ -51,14 +53,41 @@ async function testRestartStateFiles(): Promise<void> {
       selectedSessionId: 42,
       sessions: [
         state.sessions[0],
-        { ...state.sessions[0], devinSessionId: 'bad-tag', tag: 'missing' },
-        { ...state.sessions[0], devinSessionId: 'bad-unread', unread: [{ type: 'bogus', ts: 1 }] },
-        { ...state.sessions[0], devinSessionId: 'bad-status', status: 'exited' },
+        { ...state.sessions[0], cliSessionId: 'bad-tag', tag: 'missing' },
+        { ...state.sessions[0], cliSessionId: 'bad-unread', unread: [{ type: 'bogus', ts: 1 }] },
+        { ...state.sessions[0], cliSessionId: 'bad-status', status: 'exited' },
         { ...state.sessions[0] },
       ],
     }, ['code']);
     assert.equal(mixed?.selectedSessionId, null);
     assert.deepEqual(mixed?.sessions, state.sessions);
+
+    const upgraded = validateRestartState({
+      version: 1,
+      selectedSessionId: 'session-a',
+      sessions: [{ devinSessionId: 'session-a', cwd: root, name: 'original A', tag: 'code', unread: [], status: 'waiting' }],
+    }, ['code']);
+    assert.deepEqual(upgraded, {
+      version: RESTART_STATE_VERSION,
+      selectedSessionId: 'session-a',
+      sessions: [{ adapterId: 'devin', cliSessionId: 'session-a', cwd: root, name: 'original A', tag: 'code', unread: [], status: 'waiting' }],
+    });
+    assert.equal(validateRestartState({ version: 3, selectedSessionId: null, sessions: [] }, ['code']), null);
+    const badAdapter = validateRestartState({
+      version: RESTART_STATE_VERSION,
+      selectedSessionId: null,
+      sessions: [{ ...state.sessions[0], adapterId: 'bogus' }, { ...state.sessions[0], adapterId: undefined }],
+    }, ['code']);
+    assert.deepEqual(badAdapter?.sessions, []);
+    const sameIdTwoAdapters = validateRestartState({
+      version: RESTART_STATE_VERSION,
+      selectedSessionId: null,
+      sessions: [state.sessions[0], { ...state.sessions[0], adapterId: 'claude' }, { ...state.sessions[0], adapterId: 'claude' }],
+    }, ['code']);
+    assert.deepEqual(sameIdTwoAdapters?.sessions.map((entry) => entry.adapterId), ['devin', 'claude']);
+    assert.equal(sessionKey('devin', 'abc'), 'abc');
+    assert.equal(sessionKey('claude', 'abc'), 'claude:abc');
+    assert.notEqual(sessionKey('codex', 'abc'), sessionKey('claude', 'abc'));
 
     const withPrompt: RestartState = { ...state, lastPromptAt: 1_700_000_000_000 };
     const promptFile = path.join(dataDir, 'restart-channel-prompt');
@@ -86,12 +115,12 @@ async function testRestartStateFiles(): Promise<void> {
  * @returns Promise resolved after fake PTYs and temporary configuration are cleaned up.
  */
 async function testManagerRestoreAndRefreshInput(): Promise<void> {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-conductor-manager-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'envoy-manager-'));
   const command = path.join(root, 'fake-devin');
-  const previousCommand = process.env.DEVIN_CONDUCTOR_CMD;
+  const previousCommand = process.env.ENVOY_CMD;
   try {
     fs.writeFileSync(command, "#!/bin/sh\ntrap 'exit 0' HUP TERM INT\nwhile :; do sleep 1; done\n", { mode: 0o700 });
-    process.env.DEVIN_CONDUCTOR_CMD = command;
+    process.env.ENVOY_CMD = command;
     const configPath = path.join(root, 'config.json');
     fs.writeFileSync(configPath, JSON.stringify({
       tags: ['alpha', 'beta'],
@@ -104,16 +133,16 @@ async function testManagerRestoreAndRefreshInput(): Promise<void> {
       selectedSessionId: 'session-a',
       lastPromptAt: 1_700_000_000_000,
       sessions: [
-        { devinSessionId: 'session-a', cwd: root, name: 'Original A', tag: 'alpha', unread: [{ type: 'stop', ts: 10 }], status: 'waiting' },
-        { devinSessionId: 'session-b', cwd: root, name: 'Original B', tag: 'alpha', unread: [{ type: 'permission', ts: 20 }], status: 'needs-permission' },
-        { devinSessionId: 'session-invalid', cwd: root, name: 'Invalid', tag: 'missing', unread: [], status: 'waiting' },
+        { adapterId: 'devin', cliSessionId: 'session-a', cwd: root, name: 'Original A', tag: 'alpha', unread: [{ type: 'stop', ts: 10 }], status: 'waiting' },
+        { adapterId: 'devin', cliSessionId: 'session-b', cwd: root, name: 'Original B', tag: 'alpha', unread: [{ type: 'permission', ts: 20 }], status: 'needs-permission' },
+        { adapterId: 'devin', cliSessionId: 'session-invalid', cwd: root, name: 'Invalid', tag: 'missing', unread: [], status: 'waiting' },
       ],
     };
     const restored = manager.restoreRestartState(state);
     assert.equal(restored.length, 2);
     assert.equal(manager.attachedId, null);
-    assert.deepEqual(manager.entries.filter((entry) => entry.kind === 'active').map((entry) => entry.kind === 'active' ? entry.session.devinSessionId : null), ['session-b', 'session-a']);
-    assert.equal(manager.selectedSession?.devinSessionId, 'session-a');
+    assert.deepEqual(manager.entries.filter((entry) => entry.kind === 'active').map((entry) => entry.kind === 'active' ? entry.session.cliSessionId : null), ['session-b', 'session-a']);
+    assert.equal(manager.selectedSession?.cliSessionId, 'session-a');
     assert.equal(manager.lastPromptAt, 1_700_000_000_000);
     assert.equal(manager.getRestartState().lastPromptAt, 1_700_000_000_000);
     assert.equal(manager.displayName(restored[0]), 'Alias A');
@@ -131,7 +160,7 @@ async function testManagerRestoreAndRefreshInput(): Promise<void> {
     }, root);
     input.handle('R');
     assert.equal(input.mode, 'confirm');
-    assert.equal(input.confirm?.question, 'Refresh dgui and reconnect 2 idle sessions? Draft text and local scrollback will be lost.');
+    assert.equal(input.confirm?.question, 'Refresh Envoy and reconnect 2 idle sessions? Draft text and local scrollback will be lost.');
     input.handle('n');
     assert.equal(refreshes, 0);
     assert.equal(manager.sessions.every((session) => !session.exited), true);
@@ -139,7 +168,7 @@ async function testManagerRestoreAndRefreshInput(): Promise<void> {
       refreshes++;
     }, root);
     directInput.handle('R');
-    assert.equal(directInput.notice, 'Cannot refresh: restart dgui once to enable the launcher');
+    assert.equal(directInput.notice, 'Cannot refresh: restart envoy once to enable the launcher');
     assert.equal(refreshes, 0);
     const failingInput = new InputHandler(manager, () => {}, () => {}, true, async () => {
       throw new Error('Cannot refresh: channel write failed');
@@ -161,16 +190,16 @@ async function testManagerRestoreAndRefreshInput(): Promise<void> {
     input.handle('R');
     assert.equal(input.notice, 'Cannot refresh: Alias B needs permission');
     restored[1].status = 'waiting';
-    restored[0].devinSessionId = null;
+    restored[0].cliSessionId = null;
     input.handle('R');
-    assert.equal(input.notice, 'Cannot refresh: waiting for Devin ID for Original A');
+    assert.equal(input.notice, 'Cannot refresh: waiting for session ID for Original A');
 
     manager.killAll();
     for (const session of manager.sessions) session.term.dispose();
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
   } finally {
-    if (previousCommand === undefined) delete process.env.DEVIN_CONDUCTOR_CMD;
-    else process.env.DEVIN_CONDUCTOR_CMD = previousCommand;
+    if (previousCommand === undefined) delete process.env.ENVOY_CMD;
+    else process.env.ENVOY_CMD = previousCommand;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }

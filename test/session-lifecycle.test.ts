@@ -14,9 +14,9 @@ import { TagStore } from '../src/tags';
  * @returns Nothing after isolated config and backup files are removed.
  */
 function testHookInstallation(): void {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-conductor-hooks-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'envoy-hooks-'));
   const configPath = path.join(root, '.config', 'devin', 'config.json');
-  const hookScript = path.resolve(__dirname, '..', 'bin', 'conductor-hook.sh');
+  const hookScript = path.resolve(__dirname, '..', 'bin', 'envoy-hook.sh');
   try {
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     const initial = {
@@ -35,7 +35,7 @@ function testHookInstallation(): void {
     assert.equal(hooksInstalled(configPath), false);
     installHooks(configPath);
     assert.equal(hooksInstalled(configPath), true);
-    assert.equal(fs.readFileSync(configPath + '.bak-devin-conductor', 'utf8'), raw);
+    assert.equal(fs.readFileSync(configPath + '.bak-envoy', 'utf8'), raw);
 
     const installed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     assert.deepEqual(installed.preserved, initial.preserved);
@@ -49,7 +49,7 @@ function testHookInstallation(): void {
     const once = fs.readFileSync(configPath, 'utf8');
     installHooks(configPath);
     assert.equal(fs.readFileSync(configPath, 'utf8'), once);
-    assert.equal(fs.readFileSync(configPath + '.bak-devin-conductor', 'utf8'), raw);
+    assert.equal(fs.readFileSync(configPath + '.bak-envoy', 'utf8'), raw);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -60,13 +60,13 @@ function testHookInstallation(): void {
  * @returns Promise resolved after the fake session and temporary files are removed.
  */
 async function testSessionLifecycle(): Promise<void> {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devin-conductor-lifecycle-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'envoy-lifecycle-'));
   const command = path.join(root, 'fake-devin');
-  const previousCommand = process.env.DEVIN_CONDUCTOR_CMD;
+  const previousCommand = process.env.ENVOY_CMD;
   const sent: NotificationType[] = [];
   try {
     fs.writeFileSync(command, "#!/bin/sh\ntrap 'exit 0' HUP TERM INT\nwhile :; do sleep 1; done\n", { mode: 0o700 });
-    process.env.DEVIN_CONDUCTOR_CMD = command;
+    process.env.ENVOY_CMD = command;
     const configPath = path.join(root, 'config.json');
     fs.writeFileSync(configPath, JSON.stringify({ tags: ['code'] }));
     let redraws = 0;
@@ -83,7 +83,7 @@ async function testSessionLifecycle(): Promise<void> {
     assert.equal(session.memoryBytes, null);
     manager.assignDiscoveredSessionIds(new Map([[session.pid, { memoryBytes: 64 * 1024 ** 2 }]]));
     assert.equal(session.memoryBytes, 64 * 1024 ** 2);
-    assert.equal(session.devinSessionId, null);
+    assert.equal(session.cliSessionId, null);
     manager.assignDiscoveredSessionIds(new Map());
     assert.equal(session.memoryBytes, null);
     assert.deepEqual(session.unread, []);
@@ -131,8 +131,8 @@ async function testSessionLifecycle(): Promise<void> {
     session.term.dispose();
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
   } finally {
-    if (previousCommand === undefined) delete process.env.DEVIN_CONDUCTOR_CMD;
-    else process.env.DEVIN_CONDUCTOR_CMD = previousCommand;
+    if (previousCommand === undefined) delete process.env.ENVOY_CMD;
+    else process.env.ENVOY_CMD = previousCommand;
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
