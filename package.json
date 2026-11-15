@@ -1,0 +1,26 @@
+{
+  "name": "devin-conductor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Conductor-style multi-session manager TUI for the Devin CLI",
+  "main": "dist/index.js",
+  "scripts": {
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true",
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "test": "tsx --test test/*.test.ts",
+    "start": "bin/dgui"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@xterm/headless": "6.0.0",
+    "node-pty": "1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.0",
+    "tsx": "4.20.3",
+    "typescript": "5.9.2"
+  }
+}
