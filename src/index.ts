@@ -7,6 +7,10 @@ import { EventsTailer } from './notifications';
 import { DesktopNotifier } from './notify';
 import { InputHandler } from './input';
 import { Renderer, SIDEBAR_W } from './ui/renderer';
+import { applyTheme, currentAppearance } from './ui/theme';
+import type { Appearance } from './ui/theme';
+import { AppSettings } from './settings';
+import { detectAppearance } from './ui/appearance';
 import { describeHookInstall, installHookTargets, installedHookTargets, missingHookTargets } from './hooks/installer';
 import { consumeRestartState, validateRestartChannelPath, writeRestartState } from './restart';
 import { TagStore } from './tags';
@@ -27,16 +31,19 @@ async function main(): Promise<void> {
   const tagStore = new TagStore();
   const restartState = hasRestartState ? consumeRestartState(restartChannelPath, tagStore.tags) : null;
   let defaultCwd = process.cwd();
-  let desktopNotifications = true;
+  const launchDir = defaultCwd;
   try {
-    const cfg = JSON.parse(fs.readFileSync(tagStore.configPath, 'utf8'));
-    if (cfg.desktop_notifications === false) desktopNotifications = false;
-    const dir = path.resolve(String(cfg.default_cwd).replace(/^~(?=$|\/)/, os.homedir()));
-    if (fs.statSync(dir).isDirectory()) defaultCwd = dir;
+    const dir = path.resolve((tagStore.defaultCwdSetting ?? '').replace(/^~(?=$|\/)/, os.homedir()));
+    if (tagStore.defaultCwdSetting && fs.statSync(dir).isDirectory()) defaultCwd = dir;
   } catch {}
+  const notifier = new DesktopNotifier(tagStore.desktopNotifications);
 
   // only the CLIs the user has (or explicitly enabled in the config) are driven
   const selection = selectAdapters(tagStore.adapterSettings);
+  // light/dark: ENVOY_THEME, else the `theme` setting, else the system appearance
+  const resolveAppearance = (): Promise<Appearance> => detectAppearance(process.env, process.platform, undefined, tagStore.theme);
+  applyTheme(await resolveAppearance());
+  let themeTimer: NodeJS.Timeout | null = null;
   let renderer: Renderer;
   let input: InputHandler;
   let renderEnabled = false;
@@ -50,7 +57,7 @@ async function main(): Promise<void> {
     () => {
       if (renderEnabled) renderer.schedule();
     },
-    new DesktopNotifier(desktopNotifications),
+    notifier,
     selection.adapters,
     selection.defaultAdapterId,
     tagStore.recentLimit
@@ -77,6 +84,8 @@ async function main(): Promise<void> {
     if (runtimeStopped) return;
     runtimeStopped = true;
     renderEnabled = false;
+    if (themeTimer) clearInterval(themeTimer);
+    themeTimer = null;
     renderer.stop();
     manager.discovery.stop();
     tailer.stop();
@@ -134,6 +143,31 @@ async function main(): Promise<void> {
 
   input = new InputHandler(manager, () => renderer.schedule(), () => shutdown(0), restartChannelPath !== null, refresh, defaultCwd);
   renderer = new Renderer(manager, input, os.homedir());
+  /**
+   * Re-resolves the appearance and repaints when it changed (settings change or system flip).
+   * @returns Promise resolved once any change has been applied.
+   */
+  const syncAppearance = async (): Promise<void> => {
+    const appearance = await resolveAppearance();
+    if (runtimeStopped || appearance === currentAppearance()) return;
+    applyTheme(appearance);
+    renderer.invalidate();
+    renderer.schedule();
+  };
+  input.settingsBackend = new AppSettings({
+    tagStore,
+    manager,
+    notifier,
+    launchDir,
+    onDefaultCwd: (dir) => {
+      input.defaultCwd = dir;
+    },
+    onThemeChange: () => void syncAppearance(),
+    onKoiChange: (enabled) => renderer.setKoi(enabled),
+    onKoiCountChange: (count) => renderer.setKoiCount(count),
+  });
+  renderer.setKoiCount(tagStore.koiCount, false);
+  if (tagStore.koi) renderer.setKoi(true, false);
   if (restartState) manager.restoreRestartState(restartState);
 
   /**
@@ -182,6 +216,18 @@ async function main(): Promise<void> {
   }
   renderEnabled = true;
   renderer.schedule();
+  // follow system appearance changes while running
+  let themeChecking = false;
+  themeTimer = setInterval(() => {
+    if (themeChecking) return;
+    themeChecking = true;
+    void syncAppearance()
+      .catch(() => {})
+      .finally(() => {
+        themeChecking = false;
+      });
+  }, 3000);
+  themeTimer.unref();
 }
 
 void main().catch((error: unknown) => {

@@ -2,7 +2,14 @@ import * as path from 'path';
 import type { IBufferCell, Terminal } from '@xterm/headless';
 import { SessionManager } from '../sessionManager';
 import { InputHandler } from '../input';
-import { ACCENT, BG, BG_BAR, BG_SELECT, BG_UNREAD, BOLD, CURSOR, DIM, ERROR, EXTERNAL, FG, FG_BRIGHT, OK, RECENT, RESET, RULE, SEPARATOR, WARN } from './theme';
+import { ACCENT, BG, BG_BAR, BG_SELECT, BG_UNREAD, BOLD, CURSOR, DIM, ERROR, EXTERNAL, FG, FG_BRIGHT, OK, RECENT, RESET, RULE, SEPARATOR, WARN, backgroundRgb, currentAppearance } from './theme';
+import { KoiPond, paintPond } from './koi';
+
+/** Koi are skipped below this size, where they would cover the whole screen. */
+const KOI_MIN_COLS = 60;
+const KOI_MIN_ROWS = 12;
+/** Pond animation cadence (~10 fps keeps CPU and terminal output low). */
+const KOI_FRAME_MS = 100;
 
 export const SIDEBAR_W = 34;
 
@@ -215,6 +222,7 @@ function helpLines(width: number): string[] {
     [[ACCENT, '  R          '], [FG, 'refresh Envoy and reconnect all idle ACTIVE sessions']],
     [[ACCENT, '  d          '], [FG, 'flag selected ACTIVE session as DONE — NEEDS YOU']],
     [[ACCENT, '  x          '], [FG, 'kill selected session (ACTIVE only)']],
+    [[ACCENT, '  ,          '], [FG, 'settings (theme, default dir/CLI, CLIs, RECENT rows…)']],
     [[ACCENT, '  q          '], [FG, 'quit']],
     [],
     [[DIM, '  Attached NORMAL (default): j/k or Ctrl-d/u scroll half page ·']],
@@ -269,6 +277,10 @@ export class Renderer {
   private renderTimer: NodeJS.Timeout | null = null;
   private animationTimer: NodeJS.Timeout | null = null;
   private freshnessTimer: NodeJS.Timeout | null = null;
+  private koi: KoiPond | null = null;
+  private koiCount: number | undefined;
+  private koiTimer: NodeJS.Timeout | null = null;
+  private koiLastAt = 0;
   private spinnerFrame = 0;
   private lastFrameAt = 0;
   private prevRows: string[] = [];
@@ -283,6 +295,38 @@ export class Renderer {
    * @param home User home directory for ~ abbreviation in the sidebar.
    */
   constructor(private readonly manager: SessionManager, private readonly input: InputHandler, private readonly home: string) {}
+
+  /**
+   * Turns the swimming-koi background on or off (off by default until the app enables it).
+   * @param enabled True to animate koi behind blank cells.
+   * @param repaint False at startup, before the first frame is allowed to draw.
+   * @returns Nothing; repaints everything unless `repaint` is false.
+   */
+  setKoi(enabled: boolean, repaint = true): void {
+    if (enabled && !this.koi) {
+      this.koi = new KoiPond({ count: this.koiCount });
+      this.koiLastAt = Date.now();
+    } else if (!enabled) {
+      this.koi = null;
+      if (this.koiTimer) clearTimeout(this.koiTimer);
+      this.koiTimer = null;
+    }
+    if (!repaint) return;
+    this.invalidate();
+    this.schedule();
+  }
+
+  /**
+   * Fixes how many koi swim, or restores the automatic count.
+   * @param count Whole number of fish, or undefined for automatic.
+   * @param repaint False at startup, before the first frame is allowed to draw.
+   * @returns Nothing.
+   */
+  setKoiCount(count: number | undefined, repaint = true): void {
+    this.koiCount = count;
+    this.koi?.setCount(count);
+    if (repaint) this.schedule();
+  }
 
   /**
    * Schedules a line-diff redraw at up to ~30fps and starts or settles working animation.
@@ -302,6 +346,13 @@ export class Renderer {
       if (this.stopped) return;
       this.lastFrameAt = Date.now();
       process.stdout.write(this.frame());
+      if (this.koi && !this.koiTimer) {
+        this.koiTimer = setTimeout(() => {
+          this.koiTimer = null;
+          this.schedule();
+        }, KOI_FRAME_MS);
+        this.koiTimer.unref();
+      }
       const working = this.manager.sessions.some((session) => session.status === 'working');
       if (!working) {
         if (this.animationTimer) clearTimeout(this.animationTimer);
@@ -326,6 +377,8 @@ export class Renderer {
     if (this.renderTimer) clearTimeout(this.renderTimer);
     if (this.animationTimer) clearTimeout(this.animationTimer);
     if (this.freshnessTimer) clearInterval(this.freshnessTimer);
+    if (this.koiTimer) clearTimeout(this.koiTimer);
+    this.koiTimer = null;
     this.renderTimer = null;
     this.animationTimer = null;
     this.freshnessTimer = null;
@@ -365,15 +418,27 @@ export class Renderer {
     else if (this.input.mode === 'tag-picker' && this.input.tagPicker) paneText = this.tagPickerLines(paneW);
     else if (this.input.mode === 'tag-name' && this.input.tagName) paneText = this.tagNameLines(paneW);
     else if (this.input.mode === 'tag-position' && this.input.tagPosition) paneText = this.tagPositionLines(paneW);
+    else if (this.input.mode === 'settings' && this.input.settings && this.input.settingsBackend) paneText = this.settingsLines(paneW);
     else if (!shown) paneText = helpLines(paneW);
     const offset = shown ? Math.max(0, Math.min(shown.scrollOffset, shown.term.buffer.active.baseY)) : 0;
     const pinnedPrompt = this.input.mode === 'attached' && att && !paneText && offset > 0 ? att.promptForOffset(offset) : null;
     const header = pinnedPrompt ? BG_BAR + ACCENT + '▌ ' + FG_BRIGHT + fit(pinnedPrompt, paneW - 2) : null;
     const newRows: string[] = [];
+    const pond = this.koi && cols >= KOI_MIN_COLS && paneH >= KOI_MIN_ROWS ? this.koi : null;
+    if (pond) {
+      // one pond pixel = 1 column x half a row (half-block glyphs), so pixels are small and square
+      const now = Date.now();
+      pond.setAppearance(currentAppearance());
+      pond.resize(cols, paneH * 2);
+      pond.step(Math.min(0.25, Math.max(0, (now - this.koiLastAt) / 1000)));
+      this.koiLastAt = now;
+    }
+    const water = backgroundRgb();
     for (let y = 0; y < paneH; y++) {
       // the pinned prompt takes screen row 0, pushing the scrolled view down one row
       const pane = paneText ? paneText[y] ?? '' : header && y === 0 ? header : paneRow(shown!.term, header ? y - 1 : y, paneW, offset);
-      newRows.push(side[y] + RESET + BG + SEPARATOR + '│' + pane + RESET + BG + '\x1b[K');
+      const row = side[y] + RESET + BG + SEPARATOR + '│' + pane + RESET + BG + '\x1b[K';
+      newRows.push(pond ? paintPond(row, y, pond, water, cols) : row);
     }
     let bar: string;
     const sel = this.manager.entries[this.manager.selected];
@@ -405,6 +470,8 @@ export class Renderer {
         ? ERROR + fit(` ${this.input.notice}`, barWidth)
         : statusSegment(' NORMAL', `${offset > 0 ? ` · ↑${offset}` : ''} · ${this.manager.displayName(att)} · ${att.status} · j/k scroll · gg/G top/bottom · p last prompt · i insert · Ctrl-q sidebar`, barWidth);
     else if (this.input.mode === 'form') bar = statusSegment(' NEW SESSION', ` · Enter next/tag · Tab switch field${this.manager.adapters.length > 1 ? ' · ←/→ CLI' : ''} · Esc cancel`, barWidth);
+    else if (this.input.mode === 'settings')
+      bar = statusSegment(' SETTINGS', this.input.settings?.editing ? ' · type · Enter save · Ctrl-u clear · Esc cancel' : ' · j/k move · ←/→ or Enter change · Enter edits text · Esc close', barWidth);
     else if (this.input.mode === 'rename') bar = statusSegment(' RENAME', ' · type or paste · Enter save (blank clears) · Esc cancel', barWidth);
     else if (this.input.mode === 'tag-picker') bar = statusSegment(' TAG', ' · j/k or arrows move · gg/G top/bottom · Enter select · n new · Esc cancel action', barWidth);
     else if (this.input.mode === 'tag-name') bar = statusSegment(' TAG NAME', ' · type or paste · Enter choose position · Esc tags', barWidth);
@@ -413,7 +480,7 @@ export class Renderer {
     else if (!this.manager.recentVisible) bar = statusSegment(recentHiddenLabel, ' · H show · j/k move · Enter select · r rename · R refresh · q quit', barWidth, BOLD + WARN);
     else if (sel?.kind === 'external') bar = statusSegment(' TERMINAL', ' · Enter adopt · r rename · H hide recent · R refresh · j/k move · q quit', barWidth);
     else if (sel?.kind === 'recent') bar = statusSegment(' RECENT', ' · Enter resume · r rename · H hide recent · R refresh · j/k move · q quit', barWidth);
-    else bar = statusSegment(' SIDEBAR', ' · j/k move · Enter attach · r rename · H hide recent · R refresh · m move · n new · d flag · x kill · q quit', barWidth);
+    else bar = statusSegment(' SIDEBAR', ' · j/k move · Enter attach · r rename · H hide recent · R refresh · m move · n new · d flag · x kill · , settings · q quit', barWidth);
     newRows.push(BG_BAR + bar + suffix + RESET);
     const full = cols !== this.prevCols || rows !== this.prevTermRows || this.prevRows.length === 0;
     let out = '\x1b[?25l';
@@ -642,6 +709,33 @@ export class Renderer {
       lines.push((active ? BG_SELECT + ACCENT + '  › ' + FG_BRIGHT : '    ' + FG) + fit(text, Math.max(1, width - 4)) + RESET);
     }
     lines.push('', state.error ? '  ' + ERROR + state.error.slice(0, Math.max(0, width - 3)) + RESET : '');
+    return lines;
+  }
+
+  /**
+   * Renders the settings screen: one row per setting (label, value, dimmed note), the
+   * highlighted row, an inline text editor for typed values, and the last result message.
+   * @param width Right-pane width used to clip rows.
+   * @returns ANSI rows for the settings pane.
+   */
+  private settingsLines(width: number): string[] {
+    const state = this.input.settings!;
+    const rows = this.input.settingsBackend!.rows();
+    const labelW = Math.min(24, Math.max(10, rows.reduce((max, row) => Math.max(max, row.label.length), 0) + 2));
+    const budget = Math.max(4, width - 8);
+    const lines = ['', '  ' + BOLD + ACCENT + 'Settings' + RESET, '', '  ' + DIM + fit('Changes apply immediately and are saved to ~/.config/envoy/config.json.', Math.max(0, width - 2)) + RESET, ''];
+    rows.forEach((row, i) => {
+      const active = i === state.selected;
+      const editing = active && state.editing ? state.editing : null;
+      const valueText = editing ? (editing.value.length > budget ? '…' + editing.value.slice(-(budget - 1)) : editing.value) : row.value;
+      const prefix = active ? BG_SELECT + ACCENT + '  › ' + FG_BRIGHT : '    ' + FG;
+      const arrows = !editing && active && (row.kind === 'cycle' || row.kind === 'toggle' || row.kind === 'number') ? '◂ ▸ ' : '';
+      const body = fit(row.label, labelW) + arrows + (editing ? '' : valueText);
+      lines.push(prefix + fit(body, Math.max(1, width - 4)) + RESET);
+      if (editing) lines.push('      ' + ACCENT + '❯ ' + FG_BRIGHT + valueText + CURSOR + ' ' + RESET);
+      else if (active && row.note) lines.push('      ' + DIM + fit(row.note, Math.max(0, width - 6)) + RESET);
+    });
+    lines.push('', state.message ? '  ' + (state.error ? ERROR : OK) + fit(state.message, Math.max(0, width - 3)) + RESET : '');
     return lines;
   }
 

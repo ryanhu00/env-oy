@@ -15,7 +15,7 @@ export class DesktopNotifier {
    * unread notification while the user is elsewhere.
    * @param enabled When false (config `desktop_notifications: false`), send() is a no-op.
    */
-  constructor(private readonly enabled: boolean) {}
+  constructor(public enabled: boolean) {}
 
   /**
    * Fires a fire-and-forget `osascript` banner and writes a BEL to stdout, debounced to

@@ -6,6 +6,11 @@ import type { AdapterId } from './adapters/types';
 import type { AdapterSettings } from './adapters/registry';
 import { DEFAULT_RECENT_LIMIT } from './discovery';
 import { defaultConfigPath } from './paths';
+import { KOI_MAX_COUNT } from './ui/koi';
+import type { ThemeSetting } from './ui/theme';
+
+/** Config keys the in-app settings screen may write. */
+export type SettingKey = 'theme' | 'koi' | 'koi_count' | 'default_cwd' | 'default_adapter' | 'enabled_adapters' | 'recent_limit' | 'desktop_notifications';
 
 export const SEEDED_TAGS = ['investigation', 'planning', 'code', 'chat'] as const;
 export const SESSION_ALIAS_MAX_LENGTH = 120;
@@ -96,6 +101,62 @@ export class TagStore {
   get recentLimit(): number {
     const value = this.config.recent_limit;
     return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 100 ? value : DEFAULT_RECENT_LIMIT;
+  }
+
+  /**
+   * Color scheme preference from `theme`.
+   * @returns 'light', 'dark', or 'auto' (follow the system) when unset or invalid.
+   */
+  get theme(): ThemeSetting {
+    const value = this.config.theme;
+    return value === 'light' || value === 'dark' ? value : 'auto';
+  }
+
+  /**
+   * Whether the swimming-koi background is on (`koi`, default true).
+   * @returns False only when the config explicitly says false.
+   */
+  get koi(): boolean {
+    return this.config.koi !== false;
+  }
+
+  /**
+   * Fixed number of koi from `koi_count` (a whole number from 1 to 12).
+   * @returns The count, or undefined for automatic (scales with the window).
+   */
+  get koiCount(): number | undefined {
+    const value = this.config.koi_count;
+    return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= KOI_MAX_COUNT ? value : undefined;
+  }
+
+  /**
+   * Whether desktop notifications are on (`desktop_notifications`, default true).
+   * @returns False only when the config explicitly says false.
+   */
+  get desktopNotifications(): boolean {
+    return this.config.desktop_notifications !== false;
+  }
+
+  /**
+   * Raw `default_cwd` as the user wrote it (before `~` expansion).
+   * @returns The non-empty string, or undefined when unset or invalid.
+   */
+  get defaultCwdSetting(): string | undefined {
+    const value = this.config.default_cwd;
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  }
+
+  /**
+   * Atomically sets or removes one user-facing setting, leaving every other key untouched.
+   * @param key Config key edited by the in-app settings screen.
+   * @param value New value; undefined removes the key so its default applies.
+   * @returns Nothing.
+   */
+  setSetting(key: SettingKey, value: unknown): void {
+    const next = { ...this.config };
+    if (value === undefined) delete next[key];
+    else next[key] = value;
+    this.persist(next);
   }
 
   /**

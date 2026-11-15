@@ -73,7 +73,9 @@ class Discovery {
      * @param adapters CLI adapters to poll; defaults to the registry's enabled adapters.
      * @param recentLimit Maximum RECENT rows across all CLIs (see `pickRecents`).
      */
-    constructor(ownedPids, ownedSessionKeys, baseDirs, onOwnedSessions, onUpdate, adapters = (0, registry_1.createAdapters)(), recentLimit = exports.DEFAULT_RECENT_LIMIT) {
+    constructor(ownedPids, ownedSessionKeys, baseDirs, onOwnedSessions, onUpdate, adapters = (0, registry_1.createAdapters)(), 
+    /** Maximum RECENT rows; the settings screen may change it while running. */
+    recentLimit = exports.DEFAULT_RECENT_LIMIT) {
         this.ownedPids = ownedPids;
         this.ownedSessionKeys = ownedSessionKeys;
         this.baseDirs = baseDirs;
@@ -81,6 +83,21 @@ class Discovery {
         this.onUpdate = onUpdate;
         this.adapters = adapters;
         this.recentLimit = recentLimit;
+    }
+    /**
+     * Replaces the always-scanned directories (used when the default directory changes).
+     * @param dirs New base directories.
+     * @returns Nothing; applied from the next poll.
+     */
+    setBaseDirs(dirs) {
+        this.baseDirs = [...dirs];
+    }
+    /**
+     * Starts an immediate poll (a no-op while one is already running).
+     * @returns Nothing.
+     */
+    refresh() {
+        void this.poll();
     }
     /**
      * Runs an immediate poll and starts the 5s refresh interval.

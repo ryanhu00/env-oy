@@ -18,6 +18,7 @@ class SessionManager {
     lastPromptAt = null;
     discovery;
     adapters;
+    /** CLI used for new sessions; changed at runtime through `setDefaultAdapter`. */
     defaultAdapterId;
     adapterMap;
     resumedKeys = new Set();
@@ -67,6 +68,15 @@ class SessionManager {
             }
             this.onUpdate();
         }, adapters, recentLimit);
+    }
+    /**
+     * Chooses the CLI preselected for new sessions.
+     * @param id An enabled CLI.
+     * @returns Nothing; throws when the CLI is not enabled.
+     */
+    setDefaultAdapter(id) {
+        this.adapterFor(id);
+        this.defaultAdapterId = id;
     }
     /**
      * Looks up a registered adapter.

@@ -79,6 +79,9 @@ class InputHandler {
     tagPicker = null;
     tagName = null;
     tagPosition = null;
+    settings = null;
+    /** Applies and persists settings; assigned by the app once it exists. */
+    settingsBackend = null;
     notice = '';
     pendingAction = null;
     pendingG = false;
@@ -146,6 +149,10 @@ class InputHandler {
                         this.tagName.value += payload.replace(/[\x00-\x1f\x7f]/g, '');
                         this.tagName.error = '';
                     }
+                    else if (this.mode === 'settings' && this.settings?.editing) {
+                        this.settings.editing.value += payload.replace(/[\x00-\x1f\x7f]/g, '');
+                        this.settings.message = '';
+                    }
                 }
             }
             else {
@@ -193,10 +200,15 @@ class InputHandler {
             return;
         }
         for (const key of tokenize(data)) {
-            if (key === 'H' && this.mode !== 'sidebar')
+            // H is swallowed outside the sidebar (existing, tested behavior), except in the settings
+            // editor where directory paths need it
+            const settingsEditing = this.mode === 'settings' && !!this.settings?.editing;
+            if (key === 'H' && this.mode !== 'sidebar' && !settingsEditing)
                 continue;
             if (this.mode === 'sidebar')
                 this.sidebarKey(key);
+            else if (this.mode === 'settings')
+                this.settingsKey(key);
             else if (this.mode === 'move')
                 this.moveKey(key);
             else if (this.mode === 'rename')
@@ -294,6 +306,15 @@ class InputHandler {
         else if (key === 'n') {
             this.form = { field: 0, cwd: this.defaultCwd, name: '', error: '', adapterId: this.manager.defaultAdapterId };
             this.mode = 'form';
+        }
+        else if (key === ',') {
+            if (!this.settingsBackend)
+                this.notice = 'Settings are unavailable';
+            else {
+                this.settings = { selected: 0, editing: null, message: '', error: false };
+                this.mode = 'settings';
+                this.pendingG = false;
+            }
         }
         else if (key === 'H') {
             this.manager.toggleRecentVisibility();
@@ -522,6 +543,80 @@ class InputHandler {
                 f.cwd += key;
             else
                 f.name += key;
+        }
+    }
+    /**
+     * Handles the settings screen: j/k move, ←/→ (or Enter/Space) change a value, Enter edits
+     * typed values, Esc/q/, close. Every change is applied live and saved immediately.
+     * @param key Single key token.
+     * @returns Nothing.
+     */
+    settingsKey(key) {
+        const state = this.settings;
+        const backend = this.settingsBackend;
+        if (!state || !backend) {
+            this.mode = 'sidebar';
+            return;
+        }
+        const editing = state.editing;
+        if (editing) {
+            if (key === '\x1b') {
+                state.editing = null;
+                state.message = '';
+            }
+            else if (key === '\r') {
+                const error = backend.commit(editing.id, editing.value);
+                state.error = error !== '';
+                state.message = error || 'Saved';
+                if (!error)
+                    state.editing = null;
+            }
+            else if (key === '\x7f' || key === '\b') {
+                editing.value = editing.value.slice(0, -1);
+                state.message = '';
+            }
+            else if (key === '\x15') {
+                editing.value = '';
+                state.message = '';
+            }
+            else if (key.length >= 1 && !key.startsWith('\x1b') && key >= ' ' && key !== '\x7f') {
+                editing.value += key;
+                state.message = '';
+            }
+            return;
+        }
+        const rows = backend.rows();
+        const row = rows[Math.min(state.selected, rows.length - 1)];
+        if (key === '\x1b' || key === 'q' || key === ',') {
+            this.settings = null;
+            this.mode = 'sidebar';
+            this.pendingG = false;
+            return;
+        }
+        const next = this.navigateList(key, state.selected, rows.length - 1);
+        if (next !== state.selected || key === 'j' || key === 'k' || key === 'g' || key === 'G' || key === '\x1b[A' || key === '\x1b[B') {
+            state.selected = next;
+            state.message = '';
+            return;
+        }
+        if (!row)
+            return;
+        const apply = (direction) => {
+            const error = backend.step(row.id, direction);
+            state.error = error !== '';
+            state.message = error || 'Saved';
+        };
+        if (key === '\x1b[D' || key === 'h')
+            apply(-1);
+        else if (key === '\x1b[C' || key === 'l' || key === ' ')
+            apply(1);
+        else if (key === '\r') {
+            if (row.kind === 'text' || row.kind === 'number') {
+                state.editing = { id: row.id, value: backend.initialText(row.id) };
+                state.message = '';
+            }
+            else
+                apply(1);
         }
     }
     /**

@@ -42,6 +42,9 @@ const notifications_1 = require("./notifications");
 const notify_1 = require("./notify");
 const input_1 = require("./input");
 const renderer_1 = require("./ui/renderer");
+const theme_1 = require("./ui/theme");
+const settings_1 = require("./settings");
+const appearance_1 = require("./ui/appearance");
 const installer_1 = require("./hooks/installer");
 const restart_1 = require("./restart");
 const tags_1 = require("./tags");
@@ -61,18 +64,20 @@ async function main() {
     const tagStore = new tags_1.TagStore();
     const restartState = hasRestartState ? (0, restart_1.consumeRestartState)(restartChannelPath, tagStore.tags) : null;
     let defaultCwd = process.cwd();
-    let desktopNotifications = true;
+    const launchDir = defaultCwd;
     try {
-        const cfg = JSON.parse(fs.readFileSync(tagStore.configPath, 'utf8'));
-        if (cfg.desktop_notifications === false)
-            desktopNotifications = false;
-        const dir = path.resolve(String(cfg.default_cwd).replace(/^~(?=$|\/)/, os.homedir()));
-        if (fs.statSync(dir).isDirectory())
+        const dir = path.resolve((tagStore.defaultCwdSetting ?? '').replace(/^~(?=$|\/)/, os.homedir()));
+        if (tagStore.defaultCwdSetting && fs.statSync(dir).isDirectory())
             defaultCwd = dir;
     }
     catch { }
+    const notifier = new notify_1.DesktopNotifier(tagStore.desktopNotifications);
     // only the CLIs the user has (or explicitly enabled in the config) are driven
     const selection = (0, registry_1.selectAdapters)(tagStore.adapterSettings);
+    // light/dark: ENVOY_THEME, else the `theme` setting, else the system appearance
+    const resolveAppearance = () => (0, appearance_1.detectAppearance)(process.env, process.platform, undefined, tagStore.theme);
+    (0, theme_1.applyTheme)(await resolveAppearance());
+    let themeTimer = null;
     let renderer;
     let input;
     let renderEnabled = false;
@@ -82,7 +87,7 @@ async function main() {
     const manager = new sessionManager_1.SessionManager(eventsDir, [...new Set([defaultCwd, process.cwd()])], tagStore, () => {
         if (renderEnabled)
             renderer.schedule();
-    }, new notify_1.DesktopNotifier(desktopNotifications), selection.adapters, selection.defaultAdapterId, tagStore.recentLimit);
+    }, notifier, selection.adapters, selection.defaultAdapterId, tagStore.recentLimit);
     const tailer = new notifications_1.EventsTailer(eventsDir, (id, event, payload) => manager.applyEvent(id, event, payload));
     /**
      * Restores raw mode, bracketed paste, cursor, styling, and alternate screen at most once.
@@ -106,6 +111,9 @@ async function main() {
             return;
         runtimeStopped = true;
         renderEnabled = false;
+        if (themeTimer)
+            clearInterval(themeTimer);
+        themeTimer = null;
         renderer.stop();
         manager.discovery.stop();
         tailer.stop();
@@ -167,6 +175,33 @@ async function main() {
     };
     input = new input_1.InputHandler(manager, () => renderer.schedule(), () => shutdown(0), restartChannelPath !== null, refresh, defaultCwd);
     renderer = new renderer_1.Renderer(manager, input, os.homedir());
+    /**
+     * Re-resolves the appearance and repaints when it changed (settings change or system flip).
+     * @returns Promise resolved once any change has been applied.
+     */
+    const syncAppearance = async () => {
+        const appearance = await resolveAppearance();
+        if (runtimeStopped || appearance === (0, theme_1.currentAppearance)())
+            return;
+        (0, theme_1.applyTheme)(appearance);
+        renderer.invalidate();
+        renderer.schedule();
+    };
+    input.settingsBackend = new settings_1.AppSettings({
+        tagStore,
+        manager,
+        notifier,
+        launchDir,
+        onDefaultCwd: (dir) => {
+            input.defaultCwd = dir;
+        },
+        onThemeChange: () => void syncAppearance(),
+        onKoiChange: (enabled) => renderer.setKoi(enabled),
+        onKoiCountChange: (count) => renderer.setKoiCount(count),
+    });
+    renderer.setKoiCount(tagStore.koiCount, false);
+    if (tagStore.koi)
+        renderer.setKoi(true, false);
     if (restartState)
         manager.restoreRestartState(restartState);
     /**
@@ -215,6 +250,19 @@ async function main() {
     }
     renderEnabled = true;
     renderer.schedule();
+    // follow system appearance changes while running
+    let themeChecking = false;
+    themeTimer = setInterval(() => {
+        if (themeChecking)
+            return;
+        themeChecking = true;
+        void syncAppearance()
+            .catch(() => { })
+            .finally(() => {
+            themeChecking = false;
+        });
+    }, 3000);
+    themeTimer.unref();
 }
 void main().catch((error) => {
     process.stderr.write(`${paths_1.APP_DISPLAY_NAME} failed to start: ${error instanceof Error ? error.message : String(error)}\n`);

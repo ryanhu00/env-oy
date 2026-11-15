@@ -165,6 +165,7 @@ repo is missing.
 | `Enter` / `Esc` | MOVE | commit and persist the preview / cancel and restore the exact original order |
 | `d` | sidebar | flag or unflag the selected ACTIVE session as `DONE — NEEDS YOU` (other rows just flash a hint) |
 | `x` | sidebar | kill selected ACTIVE session (y/n confirm; other rows just flash a hint) |
+| `,` | sidebar | open the settings screen (see [Settings](#settings)) |
 | `q` | sidebar | quit and kill all sessions (y/n confirm) |
 | `j` / `k`, `Ctrl-d` / `Ctrl-u` | attached NORMAL | scroll half a pane down (newest) / up (oldest) through scrollback |
 | `gg` / `G` | attached NORMAL | jump to top of scrollback / back to the live bottom |
@@ -265,9 +266,29 @@ this app are unaffected. For sessions spawned by the app it appends JSON lines t
 `$ENVOY_EVENTS_DIR/events.jsonl` (default `~/.local/share/envoy/`), which the app tails to
 update statuses.
 
+## Settings
+
+Press `,` in the sidebar to change the common settings without editing JSON. `j`/`k` move,
+`←`/`→` (or `Enter`/`Space`) change a value, and `Enter` on a typed value (default directory,
+RECENT rows) opens an inline editor (`Enter` saves, `Esc` cancels, `Ctrl-u` clears). Each change
+is saved to the config file immediately.
+
+| Setting | Applies |
+| --- | --- |
+| Theme (auto / light / dark) | immediately |
+| Koi pond on / off, koi count (auto or 1–12) | immediately |
+| Desktop notifications | immediately |
+| Default directory | immediately (next `n`) |
+| Default CLI | immediately (next `n`) |
+| RECENT rows (1–100) | immediately |
+| CLI enabled / disabled | after restarting Envoy (a note says so) |
+
+The screen only writes the keys it owns and leaves the rest of the file alone, so hand edits
+and the other options below keep working.
+
 ## Configuration
 
-Config at `~/.config/envoy/config.json`:
+Config at `~/.config/envoy/config.json` (in your home directory, not in this repo):
 
 ```json
 {
@@ -293,6 +314,9 @@ Optional keys. Unknown ids and malformed values are ignored, never fatal:
 | `recent_limit` | Maximum RECENT rows across all CLIs, a whole number from 1 to 100 (default 10). |
 | `default_cwd` | Working directory offered in the `n` form (fallback: the launch directory). |
 | `desktop_notifications` | Set to `false` to turn off desktop notifications. |
+| `theme` | `light` or `dark` forces the colors; absent (or anything else) follows the system setting. `ENVOY_THEME` wins over it. |
+| `koi` | Set to `false` to turn off the swimming-koi background (default on). |
+| `koi_count` | Fixed number of koi, 1–12. Absent = automatic: 2–6 depending on the window size. |
 
 ## Environment variables
 
@@ -303,6 +327,7 @@ Optional keys. Unknown ids and malformed values are ignored, never fatal:
 | `ENVOY_CODEX_CMD` | command spawned for Codex sessions (default `codex`) |
 | `ENVOY_EVENTS_DIR` | override the events directory |
 | `ENVOY_NO_HOOK_PROMPT=1` | skip the hook-install prompt at startup |
+| `ENVOY_THEME` | `light` or `dark` forces the colors; `auto` (default) follows the system setting |
 | `ENVOY_RESTART_CHANNEL` | internal validated launcher channel retained across refreshes |
 
 ## Troubleshooting

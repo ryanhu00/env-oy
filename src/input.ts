@@ -5,7 +5,8 @@ import type { AdapterId } from './adapters/types';
 import { ExternalSession, RecentSession } from './discovery';
 import { Session } from './session';
 import { RenameTarget, SessionManager } from './sessionManager';
-export type Mode = 'sidebar' | 'move' | 'rename' | 'attached' | 'form' | 'confirm' | 'tag-picker' | 'tag-name' | 'tag-position';
+import type { AppSettings, SettingId } from './settings';
+export type Mode = 'sidebar' | 'move' | 'rename' | 'attached' | 'form' | 'confirm' | 'tag-picker' | 'tag-name' | 'tag-position' | 'settings';
 
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
@@ -33,6 +34,16 @@ export interface RenameState {
   original: string;
   value: string;
   error: string;
+}
+
+export interface SettingsState {
+  /** Index of the highlighted row. */
+  selected: number;
+  /** Text editor for a typed setting (default directory, RECENT rows); null while browsing. */
+  editing: { id: SettingId; value: string } | null;
+  /** Last error or confirmation shown under the list. */
+  message: string;
+  error: boolean;
 }
 
 export interface TagPickerState {
@@ -87,6 +98,9 @@ export class InputHandler {
   tagPicker: TagPickerState | null = null;
   tagName: TagNameState | null = null;
   tagPosition: TagPositionState | null = null;
+  settings: SettingsState | null = null;
+  /** Applies and persists settings; assigned by the app once it exists. */
+  settingsBackend: AppSettings | null = null;
   notice = '';
   private pendingAction: PendingAction | null = null;
   private pendingG = false;
@@ -107,7 +121,7 @@ export class InputHandler {
     private readonly quit: () => void,
     private readonly refreshAvailable: boolean,
     private readonly refresh: () => void | Promise<void>,
-    private readonly defaultCwd: string
+    public defaultCwd: string
   ) {}
 
   /**
@@ -148,6 +162,9 @@ export class InputHandler {
           } else if (this.mode === 'tag-name' && this.tagName) {
             this.tagName.value += payload.replace(/[\x00-\x1f\x7f]/g, '');
             this.tagName.error = '';
+          } else if (this.mode === 'settings' && this.settings?.editing) {
+            this.settings.editing.value += payload.replace(/[\x00-\x1f\x7f]/g, '');
+            this.settings.message = '';
           }
         }
       } else {
@@ -189,8 +206,12 @@ export class InputHandler {
       return;
     }
     for (const key of tokenize(data)) {
-      if (key === 'H' && this.mode !== 'sidebar') continue;
+      // H is swallowed outside the sidebar (existing, tested behavior), except in the settings
+      // editor where directory paths need it
+      const settingsEditing = this.mode === 'settings' && !!this.settings?.editing;
+      if (key === 'H' && this.mode !== 'sidebar' && !settingsEditing) continue;
       if (this.mode === 'sidebar') this.sidebarKey(key);
+      else if (this.mode === 'settings') this.settingsKey(key);
       else if (this.mode === 'move') this.moveKey(key);
       else if (this.mode === 'rename') this.renameKey(key);
       else if (this.mode === 'form') this.formKey(key);
@@ -267,6 +288,13 @@ export class InputHandler {
     } else if (key === 'n') {
       this.form = { field: 0, cwd: this.defaultCwd, name: '', error: '', adapterId: this.manager.defaultAdapterId };
       this.mode = 'form';
+    } else if (key === ',') {
+      if (!this.settingsBackend) this.notice = 'Settings are unavailable';
+      else {
+        this.settings = { selected: 0, editing: null, message: '', error: false };
+        this.mode = 'settings';
+        this.pendingG = false;
+      }
     } else if (key === 'H') {
       this.manager.toggleRecentVisibility();
     } else if (key === 'R') {
@@ -458,6 +486,71 @@ export class InputHandler {
     } else if (key.length >= 1 && !key.startsWith('\x1b') && key >= ' ' && key !== '\x7f') {
       if (f.field === 0) f.cwd += key;
       else f.name += key;
+    }
+  }
+
+  /**
+   * Handles the settings screen: j/k move, ←/→ (or Enter/Space) change a value, Enter edits
+   * typed values, Esc/q/, close. Every change is applied live and saved immediately.
+   * @param key Single key token.
+   * @returns Nothing.
+   */
+  private settingsKey(key: string): void {
+    const state = this.settings;
+    const backend = this.settingsBackend;
+    if (!state || !backend) {
+      this.mode = 'sidebar';
+      return;
+    }
+    const editing = state.editing;
+    if (editing) {
+      if (key === '\x1b') {
+        state.editing = null;
+        state.message = '';
+      } else if (key === '\r') {
+        const error = backend.commit(editing.id, editing.value);
+        state.error = error !== '';
+        state.message = error || 'Saved';
+        if (!error) state.editing = null;
+      } else if (key === '\x7f' || key === '\b') {
+        editing.value = editing.value.slice(0, -1);
+        state.message = '';
+      } else if (key === '\x15') {
+        editing.value = '';
+        state.message = '';
+      } else if (key.length >= 1 && !key.startsWith('\x1b') && key >= ' ' && key !== '\x7f') {
+        editing.value += key;
+        state.message = '';
+      }
+      return;
+    }
+    const rows = backend.rows();
+    const row = rows[Math.min(state.selected, rows.length - 1)];
+    if (key === '\x1b' || key === 'q' || key === ',') {
+      this.settings = null;
+      this.mode = 'sidebar';
+      this.pendingG = false;
+      return;
+    }
+    const next = this.navigateList(key, state.selected, rows.length - 1);
+    if (next !== state.selected || key === 'j' || key === 'k' || key === 'g' || key === 'G' || key === '\x1b[A' || key === '\x1b[B') {
+      state.selected = next;
+      state.message = '';
+      return;
+    }
+    if (!row) return;
+    const apply = (direction: 1 | -1): void => {
+      const error = backend.step(row.id, direction);
+      state.error = error !== '';
+      state.message = error || 'Saved';
+    };
+    if (key === '\x1b[D' || key === 'h') apply(-1);
+    else if (key === '\x1b[C' || key === 'l' || key === ' ') apply(1);
+    else if (key === '\r') {
+      if (row.kind === 'text' || row.kind === 'number') {
+        state.editing = { id: row.id, value: backend.initialText(row.id) };
+        state.message = '';
+      } else apply(1);
     }
   }
 

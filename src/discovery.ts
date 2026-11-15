@@ -69,12 +69,30 @@ export class Discovery {
   constructor(
     private readonly ownedPids: () => Set<number>,
     private readonly ownedSessionKeys: () => Set<string>,
-    private readonly baseDirs: string[],
+    private baseDirs: string[],
     private readonly onOwnedSessions: (sessions: Map<number, OwnedSessionSample>) => void,
     private readonly onUpdate: () => void,
     private readonly adapters: readonly CliAdapter[] = createAdapters(),
-    private readonly recentLimit = DEFAULT_RECENT_LIMIT
+    /** Maximum RECENT rows; the settings screen may change it while running. */
+    public recentLimit = DEFAULT_RECENT_LIMIT
   ) {}
+
+  /**
+   * Replaces the always-scanned directories (used when the default directory changes).
+   * @param dirs New base directories.
+   * @returns Nothing; applied from the next poll.
+   */
+  setBaseDirs(dirs: string[]): void {
+    this.baseDirs = [...dirs];
+  }
+
+  /**
+   * Starts an immediate poll (a no-op while one is already running).
+   * @returns Nothing.
+   */
+  refresh(): void {
+    void this.poll();
+  }
 
   /**
    * Runs an immediate poll and starts the 5s refresh interval.

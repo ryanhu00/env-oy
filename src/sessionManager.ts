@@ -47,7 +47,8 @@ export class SessionManager {
   lastPromptAt: number | null = null;
   readonly discovery: Discovery;
   readonly adapters: readonly CliAdapter[];
-  readonly defaultAdapterId: AdapterId;
+  /** CLI used for new sessions; changed at runtime through `setDefaultAdapter`. */
+  defaultAdapterId: AdapterId;
   private readonly adapterMap: Map<AdapterId, CliAdapter>;
   private readonly resumedKeys = new Set<string>();
   private readonly runtimeOrder = new Map<string, Session[]>();
@@ -99,6 +100,16 @@ export class SessionManager {
       adapters,
       recentLimit
     );
+  }
+
+  /**
+   * Chooses the CLI preselected for new sessions.
+   * @param id An enabled CLI.
+   * @returns Nothing; throws when the CLI is not enabled.
+   */
+  setDefaultAdapter(id: AdapterId): void {
+    this.adapterFor(id);
+    this.defaultAdapterId = id;
   }
 
   /**

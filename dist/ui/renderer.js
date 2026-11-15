@@ -38,6 +38,12 @@ exports.formatMemory = formatMemory;
 exports.formatAgo = formatAgo;
 const path = __importStar(require("path"));
 const theme_1 = require("./theme");
+const koi_1 = require("./koi");
+/** Koi are skipped below this size, where they would cover the whole screen. */
+const KOI_MIN_COLS = 60;
+const KOI_MIN_ROWS = 12;
+/** Pond animation cadence (~10 fps keeps CPU and terminal output low). */
+const KOI_FRAME_MS = 100;
 exports.SIDEBAR_W = 34;
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 /**
@@ -265,6 +271,7 @@ function helpLines(width) {
         [[theme_1.ACCENT, '  R          '], [theme_1.FG, 'refresh Envoy and reconnect all idle ACTIVE sessions']],
         [[theme_1.ACCENT, '  d          '], [theme_1.FG, 'flag selected ACTIVE session as DONE — NEEDS YOU']],
         [[theme_1.ACCENT, '  x          '], [theme_1.FG, 'kill selected session (ACTIVE only)']],
+        [[theme_1.ACCENT, '  ,          '], [theme_1.FG, 'settings (theme, default dir/CLI, CLIs, RECENT rows…)']],
         [[theme_1.ACCENT, '  q          '], [theme_1.FG, 'quit']],
         [],
         [[theme_1.DIM, '  Attached NORMAL (default): j/k or Ctrl-d/u scroll half page ·']],
@@ -322,6 +329,10 @@ class Renderer {
     renderTimer = null;
     animationTimer = null;
     freshnessTimer = null;
+    koi = null;
+    koiCount;
+    koiTimer = null;
+    koiLastAt = 0;
     spinnerFrame = 0;
     lastFrameAt = 0;
     prevRows = [];
@@ -338,6 +349,40 @@ class Renderer {
         this.manager = manager;
         this.input = input;
         this.home = home;
+    }
+    /**
+     * Turns the swimming-koi background on or off (off by default until the app enables it).
+     * @param enabled True to animate koi behind blank cells.
+     * @param repaint False at startup, before the first frame is allowed to draw.
+     * @returns Nothing; repaints everything unless `repaint` is false.
+     */
+    setKoi(enabled, repaint = true) {
+        if (enabled && !this.koi) {
+            this.koi = new koi_1.KoiPond({ count: this.koiCount });
+            this.koiLastAt = Date.now();
+        }
+        else if (!enabled) {
+            this.koi = null;
+            if (this.koiTimer)
+                clearTimeout(this.koiTimer);
+            this.koiTimer = null;
+        }
+        if (!repaint)
+            return;
+        this.invalidate();
+        this.schedule();
+    }
+    /**
+     * Fixes how many koi swim, or restores the automatic count.
+     * @param count Whole number of fish, or undefined for automatic.
+     * @param repaint False at startup, before the first frame is allowed to draw.
+     * @returns Nothing.
+     */
+    setKoiCount(count, repaint = true) {
+        this.koiCount = count;
+        this.koi?.setCount(count);
+        if (repaint)
+            this.schedule();
     }
     /**
      * Schedules a line-diff redraw at up to ~30fps and starts or settles working animation.
@@ -360,6 +405,13 @@ class Renderer {
                 return;
             this.lastFrameAt = Date.now();
             process.stdout.write(this.frame());
+            if (this.koi && !this.koiTimer) {
+                this.koiTimer = setTimeout(() => {
+                    this.koiTimer = null;
+                    this.schedule();
+                }, KOI_FRAME_MS);
+                this.koiTimer.unref();
+            }
             const working = this.manager.sessions.some((session) => session.status === 'working');
             if (!working) {
                 if (this.animationTimer)
@@ -389,6 +441,9 @@ class Renderer {
             clearTimeout(this.animationTimer);
         if (this.freshnessTimer)
             clearInterval(this.freshnessTimer);
+        if (this.koiTimer)
+            clearTimeout(this.koiTimer);
+        this.koiTimer = null;
         this.renderTimer = null;
         this.animationTimer = null;
         this.freshnessTimer = null;
@@ -431,16 +486,29 @@ class Renderer {
             paneText = this.tagNameLines(paneW);
         else if (this.input.mode === 'tag-position' && this.input.tagPosition)
             paneText = this.tagPositionLines(paneW);
+        else if (this.input.mode === 'settings' && this.input.settings && this.input.settingsBackend)
+            paneText = this.settingsLines(paneW);
         else if (!shown)
             paneText = helpLines(paneW);
         const offset = shown ? Math.max(0, Math.min(shown.scrollOffset, shown.term.buffer.active.baseY)) : 0;
         const pinnedPrompt = this.input.mode === 'attached' && att && !paneText && offset > 0 ? att.promptForOffset(offset) : null;
         const header = pinnedPrompt ? theme_1.BG_BAR + theme_1.ACCENT + '▌ ' + theme_1.FG_BRIGHT + fit(pinnedPrompt, paneW - 2) : null;
         const newRows = [];
+        const pond = this.koi && cols >= KOI_MIN_COLS && paneH >= KOI_MIN_ROWS ? this.koi : null;
+        if (pond) {
+            // one pond pixel = 1 column x half a row (half-block glyphs), so pixels are small and square
+            const now = Date.now();
+            pond.setAppearance((0, theme_1.currentAppearance)());
+            pond.resize(cols, paneH * 2);
+            pond.step(Math.min(0.25, Math.max(0, (now - this.koiLastAt) / 1000)));
+            this.koiLastAt = now;
+        }
+        const water = (0, theme_1.backgroundRgb)();
         for (let y = 0; y < paneH; y++) {
             // the pinned prompt takes screen row 0, pushing the scrolled view down one row
             const pane = paneText ? paneText[y] ?? '' : header && y === 0 ? header : paneRow(shown.term, header ? y - 1 : y, paneW, offset);
-            newRows.push(side[y] + theme_1.RESET + theme_1.BG + theme_1.SEPARATOR + '│' + pane + theme_1.RESET + theme_1.BG + '\x1b[K');
+            const row = side[y] + theme_1.RESET + theme_1.BG + theme_1.SEPARATOR + '│' + pane + theme_1.RESET + theme_1.BG + '\x1b[K';
+            newRows.push(pond ? (0, koi_1.paintPond)(row, y, pond, water, cols) : row);
         }
         let bar;
         const sel = this.manager.entries[this.manager.selected];
@@ -474,6 +542,8 @@ class Renderer {
                 : statusSegment(' NORMAL', `${offset > 0 ? ` · ↑${offset}` : ''} · ${this.manager.displayName(att)} · ${att.status} · j/k scroll · gg/G top/bottom · p last prompt · i insert · Ctrl-q sidebar`, barWidth);
         else if (this.input.mode === 'form')
             bar = statusSegment(' NEW SESSION', ` · Enter next/tag · Tab switch field${this.manager.adapters.length > 1 ? ' · ←/→ CLI' : ''} · Esc cancel`, barWidth);
+        else if (this.input.mode === 'settings')
+            bar = statusSegment(' SETTINGS', this.input.settings?.editing ? ' · type · Enter save · Ctrl-u clear · Esc cancel' : ' · j/k move · ←/→ or Enter change · Enter edits text · Esc close', barWidth);
         else if (this.input.mode === 'rename')
             bar = statusSegment(' RENAME', ' · type or paste · Enter save (blank clears) · Esc cancel', barWidth);
         else if (this.input.mode === 'tag-picker')
@@ -491,7 +561,7 @@ class Renderer {
         else if (sel?.kind === 'recent')
             bar = statusSegment(' RECENT', ' · Enter resume · r rename · H hide recent · R refresh · j/k move · q quit', barWidth);
         else
-            bar = statusSegment(' SIDEBAR', ' · j/k move · Enter attach · r rename · H hide recent · R refresh · m move · n new · d flag · x kill · q quit', barWidth);
+            bar = statusSegment(' SIDEBAR', ' · j/k move · Enter attach · r rename · H hide recent · R refresh · m move · n new · d flag · x kill · , settings · q quit', barWidth);
         newRows.push(theme_1.BG_BAR + bar + suffix + theme_1.RESET);
         const full = cols !== this.prevCols || rows !== this.prevTermRows || this.prevRows.length === 0;
         let out = '\x1b[?25l';
@@ -734,6 +804,34 @@ class Renderer {
             lines.push((active ? theme_1.BG_SELECT + theme_1.ACCENT + '  › ' + theme_1.FG_BRIGHT : '    ' + theme_1.FG) + fit(text, Math.max(1, width - 4)) + theme_1.RESET);
         }
         lines.push('', state.error ? '  ' + theme_1.ERROR + state.error.slice(0, Math.max(0, width - 3)) + theme_1.RESET : '');
+        return lines;
+    }
+    /**
+     * Renders the settings screen: one row per setting (label, value, dimmed note), the
+     * highlighted row, an inline text editor for typed values, and the last result message.
+     * @param width Right-pane width used to clip rows.
+     * @returns ANSI rows for the settings pane.
+     */
+    settingsLines(width) {
+        const state = this.input.settings;
+        const rows = this.input.settingsBackend.rows();
+        const labelW = Math.min(24, Math.max(10, rows.reduce((max, row) => Math.max(max, row.label.length), 0) + 2));
+        const budget = Math.max(4, width - 8);
+        const lines = ['', '  ' + theme_1.BOLD + theme_1.ACCENT + 'Settings' + theme_1.RESET, '', '  ' + theme_1.DIM + fit('Changes apply immediately and are saved to ~/.config/envoy/config.json.', Math.max(0, width - 2)) + theme_1.RESET, ''];
+        rows.forEach((row, i) => {
+            const active = i === state.selected;
+            const editing = active && state.editing ? state.editing : null;
+            const valueText = editing ? (editing.value.length > budget ? '…' + editing.value.slice(-(budget - 1)) : editing.value) : row.value;
+            const prefix = active ? theme_1.BG_SELECT + theme_1.ACCENT + '  › ' + theme_1.FG_BRIGHT : '    ' + theme_1.FG;
+            const arrows = !editing && active && (row.kind === 'cycle' || row.kind === 'toggle' || row.kind === 'number') ? '◂ ▸ ' : '';
+            const body = fit(row.label, labelW) + arrows + (editing ? '' : valueText);
+            lines.push(prefix + fit(body, Math.max(1, width - 4)) + theme_1.RESET);
+            if (editing)
+                lines.push('      ' + theme_1.ACCENT + '❯ ' + theme_1.FG_BRIGHT + valueText + theme_1.CURSOR + ' ' + theme_1.RESET);
+            else if (active && row.note)
+                lines.push('      ' + theme_1.DIM + fit(row.note, Math.max(0, width - 6)) + theme_1.RESET);
+        });
+        lines.push('', state.message ? '  ' + (state.error ? theme_1.ERROR : theme_1.OK) + fit(state.message, Math.max(0, width - 3)) + theme_1.RESET : '');
         return lines;
     }
     /**
