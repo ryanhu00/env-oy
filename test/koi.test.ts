@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { KoiPond, koiPalette, paintPond, type Rgb } from '../src/ui/koi';
+import * as theme from '../src/ui/theme';
 
 const BLACK: Rgb = [0, 0, 0];
 const BG = '\x1b[48;2;0;0;0m';
@@ -30,8 +31,9 @@ const fishRow = (pond: KoiPond): number => {
   if (best < 0) throw new Error('no fish visible');
   return best;
 };
-const newPond = (options: { seed: number; count?: number }): KoiPond => {
-  const pond = new KoiPond(options);
+/** A pond without ripples by default, so fish tests only ever see fish pixels. */
+const newPond = (options: { seed: number; count?: number; ripples?: boolean }): KoiPond => {
+  const pond = new KoiPond({ ripples: false, ...options });
   pond.resize(COLS, ROWS * 2);
   return pond;
 };
@@ -100,6 +102,64 @@ test('setCount fixes the fish count live and auto restores the size-based count'
   assert.equal(pond.fishCount, 1);
 });
 
+test('ripples spread, fade away, and never move the fish', () => {
+  const withRipples = newPond({ seed: 11, count: 3, ripples: true });
+  const without = newPond({ seed: 11, count: 3 });
+  assert.equal(withRipples.rippleCount, 0);
+  let seen = 0;
+  let max = 0;
+  for (let t = 0; t < 60; t += 0.1) {
+    withRipples.step(0.1);
+    without.step(0.1);
+    seen += withRipples.rippleCount > 0 ? 1 : 0;
+    max = Math.max(max, withRipples.rippleCount);
+  }
+  assert.ok(seen > 100, 'ripples should be around most of the time');
+  assert.ok(max >= 1 && max <= 3, `at most 3 ripples at once, saw ${max}`);
+  assert.equal(without.rippleCount, 0);
+  // ripples add water pixels but the fish are in the same place (fish pixels are identical)
+  const a = snapshot(withRipples);
+  const b = snapshot(without);
+  assert.ok(a.filter((v) => v !== 0).length > b.filter((v) => v !== 0).length);
+  for (let i = 0; i < a.length; i++) if (b[i] !== 0) assert.equal(a[i], b[i], `pixel ${i}`);
+});
+
+test('ripples are large and subtle, and rows carrying only ripples are painted', () => {
+  const pond = newPond({ seed: 21, count: 1, ripples: true });
+  for (let t = 0; t < 4; t += 0.1) pond.step(0.1);
+  assert.ok(pond.rippleCount >= 1);
+  const bgRed = theme.backgroundFor('dark')[0];
+  let lit = 0;
+  let widest = 0;
+  for (let y = 0; y < pond.height; y++) {
+    let left = -1;
+    let right = -1;
+    for (let x = 0; x < pond.width; x++) {
+      const v = pond.rgbAt(x, y);
+      if (!v) continue;
+      lit++;
+      if (left < 0) left = x;
+      right = x;
+      assert.ok(v - 1 >= 0);
+    }
+    widest = Math.max(widest, right - left);
+  }
+  assert.ok(lit > 100);
+  assert.ok(widest > 20, `ripples should be wide, widest span ${widest}`);
+  // a ripple-only pixel is only a little lighter than the water: no harsh rings
+  let faint = 0;
+  for (let y = 0; y < pond.height; y++) {
+    for (let x = 0; x < pond.width; x++) {
+      const v = pond.rgbAt(x, y);
+      if (v && (((v - 1) >> 16) & 255) - bgRed < 60) faint++;
+    }
+  }
+  assert.ok(faint > lit / 3);
+  const y = Array.from({ length: pond.height / 2 }, (_, i) => i).find((r) => pond.rowHasPixels(r))!;
+  const row = '\x1b[0m' + BG + FG + 'x'.repeat(10) + '\x1b[K';
+  assert.ok(text(paintPond(row, y, pond, BLACK, COLS)).startsWith('x'.repeat(10)));
+});
+
 test('light and dark ponds use different palettes', () => {
   const dark = newPond({ seed: 4, count: 3 });
   const light = newPond({ seed: 4, count: 3 });
@@ -110,7 +170,7 @@ test('light and dark ponds use different palettes', () => {
 
 test('paintPond leaves rows without fish untouched', () => {
   const pond = newPond({ seed: 1, count: 2 });
-  const empty = Array.from({ length: pond.height / 2 }, (_, y) => y).find((y) => !pond.rowHasFish(y));
+  const empty = Array.from({ length: pond.height / 2 }, (_, y) => y).find((y) => !pond.rowHasPixels(y));
   assert.notEqual(empty, undefined);
   const row = BG + FG + 'hello' + '\x1b[K';
   assert.equal(paintPond(row, empty!, pond, BLACK, COLS), row);
@@ -176,7 +236,7 @@ test('copying a row with a fish only ever adds half-block glyphs and blanks', ()
   for (let y = 0; y < pond.height / 2; y++) {
     const painted = paintPond(row, y, pond, BLACK, COLS);
     assert.ok(text(painted).startsWith('plain text here'));
-    assert.equal([...visible(painted)].length, pond.rowHasFish(y) ? COLS : 'plain text here'.length);
+    assert.equal([...visible(painted)].length, pond.rowHasPixels(y) ? COLS : 'plain text here'.length);
   }
 });
 

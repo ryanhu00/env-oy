@@ -24,44 +24,50 @@ interface Palette {
   cursorFg: string;
 }
 
-/** Dark: pure black background and neutral grey highlights; text and accents are the original Nord colors. */
+/**
+ * Dark: a soft near-black (#181818, the usual editor-dark level, avoiding the glare and halation
+ * of pure #000 behind #fff) with neutral grey highlights; text is a slightly softened Nord white.
+ */
 const DARK: Palette = {
-  bg: '0;0;0',
-  bgUnread: '26;26;26',
-  bgSelect: '48;48;48',
-  bgBar: '26;26;26',
-  fg: '216;222;233',
-  fgBright: '236;239;244',
-  dim: '97;110;136',
+  bg: '24;24;24',
+  bgUnread: '34;34;34',
+  bgSelect: '54;54;54',
+  bgBar: '34;34;34',
+  fg: '200;206;218',
+  fgBright: '224;228;236',
+  dim: '112;124;148',
   accent: '136;192;208',
-  rule: '64;64;64',
-  separator: '40;40;40',
+  rule: '70;70;70',
+  separator: '46;46;46',
   ok: '163;190;140',
   warn: '235;203;139',
   error: '191;97;106',
   external: '129;161;193',
   recent: '180;142;173',
-  cursorFg: '0;0;0',
+  cursorFg: '24;24;24',
 };
 
-/** Light: pure white background, neutral grey highlights, darkened accents for contrast. */
+/**
+ * Light: a soft off-white paper tone (#f4f4f2) instead of pure white, charcoal text instead of
+ * pure black, neutral grey highlights, and darkened accents for contrast.
+ */
 const LIGHT: Palette = {
-  bg: '255;255;255',
-  bgUnread: '240;240;240',
-  bgSelect: '222;222;222',
-  bgBar: '240;240;240',
-  fg: '40;40;40',
-  fgBright: '0;0;0',
-  dim: '110;110;110',
+  bg: '244;244;242',
+  bgUnread: '232;232;230',
+  bgSelect: '214;214;212',
+  bgBar: '232;232;230',
+  fg: '52;52;52',
+  fgBright: '26;26;26',
+  dim: '112;112;112',
   accent: '30;100;160',
-  rule: '200;200;200',
-  separator: '220;220;220',
+  rule: '196;196;194',
+  separator: '216;216;214',
   ok: '60;120;40',
   warn: '150;100;0',
   error: '176;40;56',
   external: '50;90;150',
   recent: '130;80;125',
-  cursorFg: '255;255;255',
+  cursorFg: '244;244;242',
 };
 
 export const RESET = '\x1b[0m';
@@ -122,7 +128,16 @@ export function applyTheme(appearance: Appearance): void {
  * @returns [r, g, b].
  */
 export function backgroundRgb(): readonly [number, number, number] {
-  const [r, g, b] = (current === 'light' ? LIGHT : DARK).bg.split(';').map(Number);
+  return backgroundFor(current);
+}
+
+/**
+ * Returns the background of a given appearance as an RGB triple.
+ * @param appearance 'light' or 'dark'.
+ * @returns [r, g, b].
+ */
+export function backgroundFor(appearance: Appearance): readonly [number, number, number] {
+  const [r, g, b] = (appearance === 'light' ? LIGHT : DARK).bg.split(';').map(Number);
   return [r, g, b];
 }
 

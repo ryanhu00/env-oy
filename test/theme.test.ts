@@ -29,12 +29,24 @@ test('light palette has a light background and a dark foreground', () => {
     return 0.2126 * r + 0.7152 * g + 0.0722 * b;
   };
   theme.applyTheme('light');
-  assert.equal(theme.BG, '\x1b[48;2;255;255;255m');
+  assert.equal(theme.BG, '\x1b[48;2;244;244;242m');
   assert.ok(luma(theme.FG) < 100);
   assert.ok(luma(theme.BG_SELECT) > 150);
   theme.applyTheme('dark');
-  assert.equal(theme.BG, '\x1b[48;2;0;0;0m');
+  assert.equal(theme.BG, '\x1b[48;2;24;24;24m');
   assert.ok(luma(theme.FG) > 180);
+});
+
+test('backgrounds are soft: never pure black or pure white, and text is never pure either', () => {
+  for (const appearance of ['dark', 'light'] as const) {
+    const [r, g, b] = theme.backgroundFor(appearance);
+    assert.ok(r + g + b > 0 && r + g + b < 765, `${appearance} background is pure`);
+    theme.applyTheme(appearance);
+    for (const sgr of [theme.FG, theme.FG_BRIGHT]) {
+      assert.doesNotMatch(sgr, /;2;(0;0;0|255;255;255)m/);
+    }
+  }
+  theme.applyTheme('dark');
 });
 
 test('macOS: AppleInterfaceStyle present = dark, exit 1 = light, missing tool = unknown', async () => {

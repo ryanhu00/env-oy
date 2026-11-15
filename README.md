@@ -113,7 +113,7 @@ Optional keys. Unknown ids and malformed values are ignored, never fatal:
 | `default_cwd` | Working directory offered in the `n` form (fallback: the launch directory). |
 | `desktop_notifications` | Set to `false` to turn off desktop notifications. |
 | `theme` | `light` or `dark` forces the colors; absent (or anything else) follows the system setting. `ENVOY_THEME` wins over it. |
-| `koi` | Set to `false` to turn off the swimming-koi background (default on). |
+| `koi` | Set to `false` to turn off the swimming-koi background and its water ripples (default on). |
 | `koi_count` | Fixed number of koi, 1–12. Absent = automatic: 2–6 depending on the window size. |
 
 ## Environment variables
@@ -162,7 +162,7 @@ npm test         # tsx --test test/*.test.ts
 Everything CLI-specific lives behind the `CliAdapter` interface in `src/adapters/types.ts`:
 how to spawn and resume the CLI, how to recognise its processes in `ps`, how to resolve a process
 to its session id and working directory, and how to list its recent sessions. There is one file
-per CLI (`devin.ts`, `claude.ts`, `codex.ts`), and `registry.ts` decides which are enabled. To add
+per CLI (`devin.ts`, `claude.ts`, `codex.ts`), and `registry.ts` decides which a~re enabled. To add
 a CLI, implement the interface, add it to `createAdapters`, add its id to `ADAPTER_IDS`, and add a
 hook entry for it in `src/hooks/installer.ts`. Session ids are stored per CLI as
 `sessionKey(adapterId, id)` (Devin bare, others prefixed `claude:` / `codex:`), so ids from

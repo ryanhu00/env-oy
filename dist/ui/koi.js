@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.KoiPond = exports.KOI_MAX_COUNT = void 0;
 exports.koiPalette = koiPalette;
 exports.paintPond = paintPond;
+const theme_1 = require("./theme");
 /** Largest fish count the settings allow. */
 exports.KOI_MAX_COUNT = 12;
 /** Fish segments from head to tail fin. */
@@ -20,6 +21,19 @@ const SPACING = 1.25 * U;
 /** Fish colour strength over a blank cell vs. under text (kept low so text stays readable). */
 const BLANK_ALPHA = 0.9;
 const TEXT_ALPHA = 0.3;
+/** Most ripples spreading at once. */
+const MAX_RIPPLES = 3;
+/** Ring radius as a fraction of the ripple's radius, and each ring's strength. */
+const RIPPLE_RINGS = [[1, 1], [0.68, 0.6], [0.42, 0.35]];
+/** Half-width of a ring in pixels. */
+const RIPPLE_THICKNESS = 1.5;
+/** Quantised strengths (pixel-art steps) of a ripple pixel, faint to strong. */
+const RIPPLE_LEVELS = [0.4, 0.7, 1];
+/** Water-highlight colour and maximum strength of a ripple, per appearance (kept subtle). */
+const RIPPLE_TONE = {
+    dark: { color: [150, 185, 215], alpha: 0.2 },
+    light: { color: [96, 128, 160], alpha: 0.2 },
+};
 /** Colour pattern per koi variety, one tone per segment (head to tail). */
 const PATTERNS = [
     ['white', 'red', 'red', 'white', 'red', 'red', 'white', 'white', 'white', 'white'], // kohaku
@@ -120,12 +134,21 @@ class KoiPond {
     rows = new Uint8Array(0);
     appearance = 'dark';
     random;
+    /** Separate stream so ripples never change where the fish swim. */
+    rippleRandom;
+    ripplesOn;
+    ripples = [];
+    rippleTimer;
     /**
      * @param options `seed` makes the pond reproducible; `count` fixes the number of fish
-     * (default scales with the pond area).
+     * (default scales with the pond area); `ripples: false` turns the water ripples off.
      */
     constructor(options = {}) {
-        this.random = mulberry32(options.seed ?? Date.now());
+        const seed = options.seed ?? Date.now();
+        this.random = mulberry32(seed);
+        this.rippleRandom = mulberry32(seed ^ 0x9e3779b9);
+        this.ripplesOn = options.ripples ?? true;
+        this.rippleTimer = 0.4 + this.rippleRandom() * 1.2;
         this.fixedCount = options.count;
     }
     /** Number of fish when set; otherwise the count scales with the pond area. */
@@ -163,6 +186,10 @@ class KoiPond {
     /** @returns How many fish are swimming. */
     get fishCount() {
         return this.fish.length;
+    }
+    /** @returns How many ripples are currently spreading. */
+    get rippleCount() {
+        return this.ripples.length;
     }
     /**
      * Resizes the pond, adding or removing fish to suit the new area and re-homing any fish
@@ -237,14 +264,78 @@ class KoiPond {
                 cur.y = prev.y + dy * k;
             }
         }
+        this.stepRipples(dt);
         this.rasterize();
     }
     /**
-     * Tells whether any fish pixel lies on a terminal row (cheap reject for the painter).
-     * @param y Terminal row; covers pond pixel rows 2y and 2y+1.
-     * @returns True when either pixel row has at least one fish pixel.
+     * Ages the ripples, drops finished ones, and starts a new one now and then.
+     * @param dt Elapsed seconds.
+     * @returns Nothing.
      */
-    rowHasFish(y) {
+    stepRipples(dt) {
+        if (!this.ripplesOn)
+            return;
+        for (const r of this.ripples)
+            r.age += dt;
+        this.ripples = this.ripples.filter((r) => r.age < r.life);
+        this.rippleTimer -= dt;
+        if (this.rippleTimer > 0)
+            return;
+        this.rippleTimer = 2.5 + this.rippleRandom() * 3.5;
+        if (this.ripples.length >= MAX_RIPPLES)
+            return;
+        const r = this.rippleRandom;
+        this.ripples.push({
+            x: r() * this.w,
+            y: r() * this.h,
+            age: 0,
+            life: 5.5 + r() * 2.5,
+            radius: clamp(Math.min(this.w, this.h) * 0.5, 14, 48) * (0.7 + r() * 0.5),
+        });
+    }
+    /**
+     * Paints the ripple rings (concentric, pixel-stepped, fading as they spread) into the grid.
+     * @param plot Writes one packed pixel.
+     * @returns Nothing.
+     */
+    drawRipples(plot) {
+        if (this.ripples.length === 0)
+            return;
+        const water = (0, theme_1.backgroundFor)(this.appearance);
+        const tone = RIPPLE_TONE[this.appearance];
+        for (const ripple of this.ripples) {
+            const t = ripple.age / ripple.life;
+            const spread = ripple.radius * (1 - (1 - t) * (1 - t));
+            const fade = Math.pow(1 - t, 1.4);
+            const x0 = Math.max(0, Math.floor(ripple.x - spread - 2));
+            const x1 = Math.min(this.w - 1, Math.ceil(ripple.x + spread + 2));
+            const y0 = Math.max(0, Math.floor(ripple.y - spread - 2));
+            const y1 = Math.min(this.h - 1, Math.ceil(ripple.y + spread + 2));
+            for (let py = y0; py <= y1; py++) {
+                for (let px = x0; px <= x1; px++) {
+                    const d = Math.hypot(px + 0.5 - ripple.x, py + 0.5 - ripple.y);
+                    let strength = 0;
+                    for (const [k, weight] of RIPPLE_RINGS) {
+                        if (spread * k < 2)
+                            continue;
+                        strength = Math.max(strength, weight * (1 - Math.abs(d - spread * k) / RIPPLE_THICKNESS));
+                    }
+                    strength *= fade;
+                    if (strength <= 0.1)
+                        continue;
+                    const level = RIPPLE_LEVELS[strength > 0.55 ? 2 : strength > 0.3 ? 1 : 0];
+                    plot(px, py, pack(mix(water, tone.color, level * tone.alpha)));
+                }
+            }
+        }
+    }
+    /**
+     * Tells whether any pond pixel (fish, shadow or ripple) lies on a terminal row, a cheap
+     * reject for the painter.
+     * @param y Terminal row; covers pond pixel rows 2y and 2y+1.
+     * @returns True when either pixel row has at least one pixel to draw.
+     */
+    rowHasPixels(y) {
         return y >= 0 && 2 * y < this.h && (this.rows[2 * y] === 1 || this.rows[2 * y + 1] === 1);
     }
     /**
@@ -303,6 +394,7 @@ class KoiPond {
             this.grid[py * this.w + px] = packed;
             this.rows[py] = 1;
         };
+        this.drawRipples(plot); // water first: shadows and fish sit on top of it
         const shadow = pack(palette.shadow);
         const [sx, sy] = SHADOW_OFFSET;
         // shadows first so a fish never sits under another fish's shadow
@@ -491,7 +583,7 @@ function cellWidth(cp) {
  * @returns The row with fish composited in (the same string when no fish is on this row).
  */
 function paintPond(row, y, pond, bg, totalWidth) {
-    if (!pond.rowHasFish(y))
+    if (!pond.rowHasPixels(y))
         return row;
     let out = '';
     let x = 0;
