@@ -128,6 +128,28 @@ Optional keys. Unknown ids and malformed values are ignored, never fatal:
 | `ENVOY_THEME` | `light` or `dark` forces the colors; `auto` (default) follows the system setting |
 | `ENVOY_RESTART_CHANNEL` | internal validated launcher channel retained across refreshes |
 
+## Env files
+
+Envoy does not load a `.env` file itself. Every session inherits the environment Envoy was
+started with, so put API keys and profiles in a local file outside any git repo, then load it
+when you launch Envoy:
+
+```sh
+# ~/.config/envoy/keys.env  (chmod 600; keep this out of git)
+GH_TOKEN=...
+AWS_PROFILE=dev
+```
+
+```sh
+# shell alias / function
+envoy() {
+  ( set -a; . ~/.config/envoy/keys.env; set +a; command /absolute/path/to/envoy/bin/envoy "$@" )
+}
+```
+
+The file stays on your machine. Prefer logged-in CLIs and profiles (`gh auth login`,
+`AWS_PROFILE` + `~/.aws`) over raw long-lived secrets when you can.
+
 ## Development
 
 ```sh
